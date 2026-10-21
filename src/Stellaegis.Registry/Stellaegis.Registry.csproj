@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Stellaegis.Registry</RootNamespace>
+    <PackageId>Stellaegis.Registry</PackageId>
+    <Description>Stellaegis Registry: what gives a right its meaning in an application assembled on Stellaegis.Primitives — the compartments, the users, the catalogue of the operations the modules declare, the roles that group them, the memberships and the assignments. It computes the effective rights of an actor in a space and hands them to the decision point through a port the host implements.</Description>
+    <PackageTags>stellaegis;registry;roles;memberships;catalogue;compartment</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Stellaegis.Primitives" />
+    <PackageReference Include="Stellaegis.Primitives.Hosting" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <InternalsVisibleTo Include="Stellaegis.Registry.Tests" />
+  </ItemGroup>
+
+</Project>
