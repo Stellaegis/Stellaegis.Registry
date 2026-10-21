@@ -17,18 +17,21 @@ internal sealed class CapturingEventPublisher : IEventPublisher
     }
 }
 
-/// <summary>The registry on its in-memory stores, a recording sink and a capturing publisher.</summary>
+/// <summary>The registry on its stores — in memory unless the caller registers others —, a recording sink and a capturing publisher.</summary>
 internal sealed class TestHost : IDisposable
 {
     private readonly ServiceProvider _provider;
     private readonly IServiceScope _scope;
 
-    public TestHost(bool withSink = true)
+    public TestHost(bool withSink = true, Action<IServiceCollection>? stores = null)
     {
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddSingleton<IEventPublisher>(Events);
-        services.AddStellaegisRegistryInMemory();
+        if (stores is null)
+            services.AddStellaegisRegistryInMemory();
+        else
+            stores(services);
         if (withSink)
             services.AddStellaegisRightsSink(Sink);
         _provider = services.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true, ValidateOnBuild = true });

@@ -2,15 +2,21 @@ using static Stellaegis.Registry.Tests.Fixtures;
 
 namespace Stellaegis.Registry.Tests;
 
-/// <summary>Every change that touches rights hands a snapshot to the sink, synchronously, in the same operation.</summary>
-public sealed class ProjectionTests
+/// <summary>
+/// Every change that touches rights hands a snapshot to the sink, synchronously, in the same operation. The
+/// scenarios are replayed on each store: <see cref="InMemoryProjectionTests"/>, <see cref="PostgreSqlProjectionTests"/>.
+/// </summary>
+public abstract class ProjectionTestsBase
 {
-    private static CancellationToken Ct => TestContext.Current.CancellationToken;
+    private protected static CancellationToken Ct => TestContext.Current.CancellationToken;
+
+    /// <summary>A host on the stores under test.</summary>
+    private protected abstract TestHost CreateHost(bool withSink = true);
 
     [Fact]
     public async Task A_membership_added_projects_the_memberships_of_the_person()
     {
-        using var host = await new TestHost().InstalledAsync(Ct);
+        using var host = await CreateHost().InstalledAsync(Ct);
 
         Assert.True((await host.Memberships.AddAsync(Jane, Acme, Ct)).IsSuccess);
 
@@ -22,7 +28,7 @@ public sealed class ProjectionTests
     [Fact]
     public async Task A_role_assigned_projects_the_union_of_the_roles_in_the_compartment()
     {
-        using var host = await new TestHost().InstalledAsync(Ct);
+        using var host = await CreateHost().InstalledAsync(Ct);
         await host.Memberships.AddAsync(Jane, Acme, Ct);
         host.Sink.Clear();
 
@@ -42,7 +48,7 @@ public sealed class ProjectionTests
     [Fact]
     public async Task A_role_needs_a_member_and_the_right_scope()
     {
-        using var host = await new TestHost().InstalledAsync(Ct);
+        using var host = await CreateHost().InstalledAsync(Ct);
 
         Assert.Equal(RegistryErrors.NotMemberCode, (await host.Memberships.AssignRoleAsync(Jane, Acme, "reader", Ct)).Error!.Code);
         await host.Memberships.AddAsync(Jane, Acme, Ct);
@@ -56,7 +62,7 @@ public sealed class ProjectionTests
     [Fact]
     public async Task A_platform_role_projects_the_admin_grants()
     {
-        using var host = await new TestHost().InstalledAsync(Ct);
+        using var host = await CreateHost().InstalledAsync(Ct);
 
         Assert.True((await host.Operators.AssignAsync(Jane, "super_admin", Ct)).IsSuccess);
 
@@ -72,7 +78,7 @@ public sealed class ProjectionTests
     [Fact]
     public async Task A_role_changed_recomputes_every_holder()
     {
-        using var host = await new TestHost().InstalledAsync(Ct);
+        using var host = await CreateHost().InstalledAsync(Ct);
         Assert.True((await host.Compartments.CreateAsync(Globex, "Globex", Ct)).IsSuccess);
         await host.Memberships.AddAsync(Jane, Acme, Ct);
         await host.Memberships.AddAsync(John, Globex, Ct);
@@ -102,7 +108,7 @@ public sealed class ProjectionTests
     [Fact]
     public async Task A_platform_role_changed_recomputes_its_operators()
     {
-        using var host = await new TestHost().InstalledAsync(Ct);
+        using var host = await CreateHost().InstalledAsync(Ct);
         await host.Operators.AssignAsync(Jane, "super_admin", Ct);
         host.Sink.Clear();
 
@@ -114,7 +120,7 @@ public sealed class ProjectionTests
     [Fact]
     public async Task A_user_deactivated_loses_everything_and_a_reactivated_one_gets_it_back()
     {
-        using var host = await new TestHost().InstalledAsync(Ct);
+        using var host = await CreateHost().InstalledAsync(Ct);
         await host.Memberships.AddAsync(Jane, Acme, Ct);
         await host.Memberships.AssignRoleAsync(Jane, Acme, "reader", Ct);
         await host.Operators.AssignAsync(Jane, "super_admin", Ct);
@@ -136,7 +142,7 @@ public sealed class ProjectionTests
     [Fact]
     public async Task A_compartment_terminated_is_removed_from_the_sink_and_from_the_registry()
     {
-        using var host = await new TestHost().InstalledAsync(Ct);
+        using var host = await CreateHost().InstalledAsync(Ct);
         await host.Memberships.AddAsync(Jane, Acme, Ct);
         await host.Memberships.AssignRoleAsync(Jane, Acme, "reader", Ct);
         host.Sink.Clear();
@@ -154,7 +160,7 @@ public sealed class ProjectionTests
     [Fact]
     public async Task A_compartment_suspended_holds_no_right_until_it_resumes()
     {
-        using var host = await new TestHost().InstalledAsync(Ct);
+        using var host = await CreateHost().InstalledAsync(Ct);
         await host.Memberships.AddAsync(Jane, Acme, Ct);
         await host.Memberships.AssignRoleAsync(Jane, Acme, "reader", Ct);
         host.Sink.Clear();
@@ -177,7 +183,7 @@ public sealed class ProjectionTests
     [Fact]
     public async Task A_membership_removed_projects_empty_rights_in_the_compartment()
     {
-        using var host = await new TestHost().InstalledAsync(Ct);
+        using var host = await CreateHost().InstalledAsync(Ct);
         await host.Memberships.AddAsync(Jane, Acme, Ct);
         await host.Memberships.AssignRoleAsync(Jane, Acme, "reader", Ct);
         host.Sink.Clear();
@@ -192,11 +198,17 @@ public sealed class ProjectionTests
     [Fact]
     public async Task Without_a_sink_the_registry_still_works_and_warns_once()
     {
-        using var host = await new TestHost(withSink: false).InstalledAsync(Ct);
+        using var host = await CreateHost(withSink: false).InstalledAsync(Ct);
 
         Assert.True((await host.Memberships.AddAsync(Jane, Acme, Ct)).IsSuccess);
         Assert.True((await host.Memberships.AssignRoleAsync(Jane, Acme, "reader", Ct)).IsSuccess);
 
         Assert.Equal(["reader"], Assert.Single(await host.Memberships.ListByUserAsync(Jane, Ct)).Roles);
     }
+}
+
+/// <summary>The scenarios on the in-memory stores.</summary>
+public sealed class InMemoryProjectionTests : ProjectionTestsBase
+{
+    private protected override TestHost CreateHost(bool withSink = true) => new(withSink);
 }
