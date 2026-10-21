@@ -1,0 +1,97 @@
+using Stellaegis.Primitives;
+
+namespace Stellaegis.Registry.AspNetCore;
+
+/// <summary>A compartment, as the administration routes answer it.</summary>
+/// <param name="Compartment">Its name.</param>
+/// <param name="DisplayName">What people call it.</param>
+/// <param name="Status">Its state: <c>active</c>, <c>suspended</c> or <c>terminated</c>.</param>
+/// <param name="CreatedAt">When it was created.</param>
+public sealed record CompartmentSummary(string Compartment, string DisplayName, string Status, DateTimeOffset CreatedAt)
+{
+    internal static CompartmentSummary Of(CompartmentRecord record)
+        => new(record.Compartment.Value, record.DisplayName, Statuses.Of(record.Status), record.CreatedAt);
+}
+
+/// <summary>The body of the creation of a compartment.</summary>
+/// <param name="Compartment">Its name, in the grammar of a compartment.</param>
+/// <param name="DisplayName">What people call it.</param>
+public sealed record CreateCompartmentRequest(string Compartment, string DisplayName);
+
+/// <summary>The body of the renaming of a compartment.</summary>
+/// <param name="DisplayName">What people call it from now on.</param>
+public sealed record RenameCompartmentRequest(string DisplayName);
+
+/// <summary>A user, as the administration routes answer them.</summary>
+/// <param name="Subject">Their <c>sub</c>.</param>
+/// <param name="Email">Their e-mail.</param>
+/// <param name="DisplayName">What people call them.</param>
+/// <param name="Status">Their state: <c>active</c> or <c>deactivated</c>.</param>
+/// <param name="CreatedAt">When they were recorded.</param>
+public sealed record UserSummary(string Subject, string Email, string DisplayName, string Status, DateTimeOffset CreatedAt)
+{
+    internal static UserSummary Of(UserRecord record)
+        => new(record.Subject, record.Email, record.DisplayName, Statuses.Of(record.Status), record.CreatedAt);
+}
+
+/// <summary>An operation of the catalogue, as the administration routes answer it.</summary>
+/// <param name="Module">The module that declares it.</param>
+/// <param name="Operation">Its identity, <c>target.name</c>.</param>
+/// <param name="Kind">What it does to the data: <c>read</c>, <c>write</c> or <c>delete</c>.</param>
+public sealed record CatalogEntrySummary(string Module, string Operation, string Kind)
+{
+    internal static CatalogEntrySummary Of(CatalogEntry entry)
+        => new(entry.Module, entry.Operation, entry.Kind.ToString().ToLowerInvariant());
+}
+
+/// <summary>A role with its operations, as the administration routes answer it.</summary>
+/// <param name="Name">Its name.</param>
+/// <param name="Scope">Where it is held: <c>compartment</c> or <c>platform</c>.</param>
+/// <param name="DisplayName">What people call it.</param>
+/// <param name="Declared">Whether the application declares it in code — then it cannot be deleted.</param>
+/// <param name="Operations">The identities of its operations.</param>
+public sealed record RoleSummary(string Name, string Scope, string DisplayName, bool Declared, string[] Operations)
+{
+    internal static RoleSummary Of(Role role)
+        => new(role.Name, Statuses.Of(role.Scope), role.DisplayName, role.Declared, role.Operations.ToArray());
+}
+
+/// <summary>The body of the creation of a role.</summary>
+/// <param name="Name">Its name, an identifier.</param>
+/// <param name="Scope">Where it is held: <c>compartment</c> or <c>platform</c>.</param>
+/// <param name="DisplayName">What people call it.</param>
+/// <param name="Operations">The identities of its operations, each in the catalogue.</param>
+public sealed record CreateRoleRequest(string Name, string Scope, string DisplayName, string[] Operations);
+
+/// <summary>The body of the change of a role: its display name and its operations, replaced.</summary>
+/// <param name="DisplayName">What people call it from now on.</param>
+/// <param name="Operations">The identities of its operations, each in the catalogue.</param>
+public sealed record UpdateRoleRequest(string DisplayName, string[] Operations);
+
+/// <summary>A member of a compartment with their roles there, as the administration routes answer them.</summary>
+/// <param name="Subject">The member.</param>
+/// <param name="Compartment">The compartment.</param>
+/// <param name="Roles">The names of their compartment roles there.</param>
+public sealed record MemberSummary(string Subject, string Compartment, string[] Roles)
+{
+    internal static MemberSummary Of(Membership membership)
+        => new(membership.Subject, membership.Compartment.Value, membership.Roles.ToArray());
+}
+
+/// <summary>An operator of the platform with their roles, as the administration routes answer them.</summary>
+/// <param name="Subject">The operator.</param>
+/// <param name="Roles">The names of their platform roles.</param>
+public sealed record OperatorSummary(string Subject, string[] Roles);
+
+/// <summary>The states and scopes on the wire: lowercase words, never the numbers of the enums.</summary>
+internal static class Statuses
+{
+    public static string Of(CompartmentStatus status) => status.ToString().ToLowerInvariant();
+
+    public static string Of(UserStatus status) => status.ToString().ToLowerInvariant();
+
+    public static string Of(RoleScope scope) => scope.ToString().ToLowerInvariant();
+
+    public static bool TryParseScope(string? value, out RoleScope scope)
+        => Enum.TryParse(value, ignoreCase: true, out scope) && Enum.IsDefined(scope);
+}

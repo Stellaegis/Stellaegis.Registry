@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Stellaegis.Registry.AspNetCore</RootNamespace>
+    <PackageId>Stellaegis.Registry.AspNetCore</PackageId>
+    <Description>Stellaegis Registry in an ASP.NET Core host: the administration routes of the registry — the compartments, the users, the catalogue of operations, the roles, the memberships, the operators of the platform —, each labelled with its operation and decided in the shared space by the host's rights system.</Description>
+    <PackageTags>stellaegis;registry;administration;aspnetcore;roles;memberships</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Stellaegis.Registry\Stellaegis.Registry.csproj" />
+    <PackageReference Include="Stellaegis.Primitives.AspNetCore" />
+    <InternalsVisibleTo Include="Stellaegis.Registry.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+</Project>
