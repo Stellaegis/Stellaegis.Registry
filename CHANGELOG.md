@@ -7,6 +7,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [5.0.1] — 2026-10-21
+
+### Fixed
+
+- The readme the packages embed: the 5.0.0 packages carry the draft readme of the repository — "being extracted,
+  nothing is published yet" —, the tag having been pushed before the readme was written. Nothing else changes;
+  5.0.0 is to be unlisted.
+
 ## [5.0.0] — 2026-10-21
 
 First release of the packages: the enterprise subset of the registry of the Stellaegis framework, extracted and
