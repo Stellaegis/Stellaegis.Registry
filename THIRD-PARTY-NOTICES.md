@@ -16,6 +16,8 @@ alongside them, each under its own license. The table is completed as the packag
 
 `Stellaegis.Registry.AspNetCore` uses the ASP.NET Core shared framework, which the host already has.
 
-Test-only dependencies (xUnit, the ASP.NET Core test host) are not part of any package and are not
-listed here. The PostgreSQL server that the tests and the publishing workflow use is not part of any
+Test-only dependencies (xUnit, the ASP.NET Core test host) and the dependencies of the example host under
+`samples/` (the packages `Stellaegis.Identity`, `Stellaegis.Issuer` and `Stellaegis.Access`, MIT, and what they bring:
+OpenIddict, Apache-2.0; Entity Framework Core and its Npgsql provider, MIT and PostgreSQL) are not part of any
+package and are not listed here. The PostgreSQL server that the tests and the publishing workflow use is not part of any
 package either.
