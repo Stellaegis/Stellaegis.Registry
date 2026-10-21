@@ -7,10 +7,14 @@ namespace Stellaegis.Registry.AspNetCore;
 /// <param name="DisplayName">What people call it.</param>
 /// <param name="Status">Its state: <c>active</c>, <c>suspended</c> or <c>terminated</c>.</param>
 /// <param name="CreatedAt">When it was created.</param>
-public sealed record CompartmentSummary(string Compartment, string DisplayName, string Status, DateTimeOffset CreatedAt)
+/// <param name="CreatedBy">Who created it.</param>
+/// <param name="ModifiedAt">When it was last changed.</param>
+/// <param name="ModifiedBy">Who last changed it.</param>
+public sealed record CompartmentSummary(string Compartment, string DisplayName, string Status, DateTimeOffset CreatedAt, string CreatedBy, DateTimeOffset ModifiedAt, string ModifiedBy)
 {
     internal static CompartmentSummary Of(CompartmentRecord record)
-        => new(record.Compartment.Value, record.DisplayName, Statuses.Of(record.Status), record.CreatedAt);
+        => new(record.Compartment.Value, record.DisplayName, Statuses.Of(record.Status),
+            record.Audit.Created.At, record.Audit.Created.By.Value, record.Audit.Modified.At, record.Audit.Modified.By.Value);
 }
 
 /// <summary>The body of the creation of a compartment.</summary>
@@ -28,10 +32,14 @@ public sealed record RenameCompartmentRequest(string DisplayName);
 /// <param name="DisplayName">What people call them.</param>
 /// <param name="Status">Their state: <c>active</c> or <c>deactivated</c>.</param>
 /// <param name="CreatedAt">When they were recorded.</param>
-public sealed record UserSummary(string Subject, string Email, string DisplayName, string Status, DateTimeOffset CreatedAt)
+/// <param name="CreatedBy">Who recorded them: themselves, when they registered.</param>
+/// <param name="ModifiedAt">When they were last changed.</param>
+/// <param name="ModifiedBy">Who last changed them.</param>
+public sealed record UserSummary(string Subject, string Email, string DisplayName, string Status, DateTimeOffset CreatedAt, string CreatedBy, DateTimeOffset ModifiedAt, string ModifiedBy)
 {
     internal static UserSummary Of(UserRecord record)
-        => new(record.Subject, record.Email, record.DisplayName, Statuses.Of(record.Status), record.CreatedAt);
+        => new(record.Subject, record.Email, record.DisplayName, Statuses.Of(record.Status),
+            record.Audit.Created.At, record.Audit.Created.By.Value, record.Audit.Modified.At, record.Audit.Modified.By.Value);
 }
 
 /// <summary>An operation of the catalogue, as the administration routes answer it.</summary>
@@ -50,10 +58,15 @@ public sealed record CatalogEntrySummary(string Module, string Operation, string
 /// <param name="DisplayName">What people call it.</param>
 /// <param name="Declared">Whether the application declares it in code — then it cannot be deleted.</param>
 /// <param name="Operations">The identities of its operations.</param>
-public sealed record RoleSummary(string Name, string Scope, string DisplayName, bool Declared, string[] Operations)
+/// <param name="CreatedAt">When it was created.</param>
+/// <param name="CreatedBy">Who created it: the installation, for a declared role.</param>
+/// <param name="ModifiedAt">When it was last changed.</param>
+/// <param name="ModifiedBy">Who last changed it.</param>
+public sealed record RoleSummary(string Name, string Scope, string DisplayName, bool Declared, string[] Operations, DateTimeOffset CreatedAt, string CreatedBy, DateTimeOffset ModifiedAt, string ModifiedBy)
 {
     internal static RoleSummary Of(Role role)
-        => new(role.Name, Statuses.Of(role.Scope), role.DisplayName, role.Declared, role.Operations.ToArray());
+        => new(role.Name, Statuses.Of(role.Scope), role.DisplayName, role.Declared, role.Operations.ToArray(),
+            role.Audit.Created.At, role.Audit.Created.By.Value, role.Audit.Modified.At, role.Audit.Modified.By.Value);
 }
 
 /// <summary>The body of the creation of a role.</summary>
@@ -72,10 +85,12 @@ public sealed record UpdateRoleRequest(string DisplayName, string[] Operations);
 /// <param name="Subject">The member.</param>
 /// <param name="Compartment">The compartment.</param>
 /// <param name="Roles">The names of their compartment roles there.</param>
-public sealed record MemberSummary(string Subject, string Compartment, string[] Roles)
+/// <param name="GrantedAt">When they were admitted in the compartment.</param>
+/// <param name="GrantedBy">Who admitted them.</param>
+public sealed record MemberSummary(string Subject, string Compartment, string[] Roles, DateTimeOffset GrantedAt, string GrantedBy)
 {
     internal static MemberSummary Of(Membership membership)
-        => new(membership.Subject, membership.Compartment.Value, membership.Roles.ToArray());
+        => new(membership.Subject, membership.Compartment.Value, membership.Roles.ToArray(), membership.Granted.At, membership.Granted.By.Value);
 }
 
 /// <summary>An operator of the platform with their roles, as the administration routes answer them.</summary>

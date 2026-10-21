@@ -54,11 +54,11 @@ internal static class WebTestHost
         using var scope = app.Services.CreateScope();
         var services = scope.ServiceProvider;
         await services.GetRequiredService<ICatalog>().RecordAsync([Fixtures.Inventory, Fixtures.Billing, RegistryModule.Declaration], ct);
-        Assert.True((await services.GetRequiredService<IRoles>().DeclareAsync(Fixtures.DeclaredRoles, ct)).IsSuccess);
-        Assert.True((await services.GetRequiredService<ICompartments>().CreateAsync(Fixtures.Acme, "Acme SA", ct)).IsSuccess);
+        Assert.True((await services.GetRequiredService<IRoles>().DeclareAsync(Fixtures.DeclaredRoles, Fixtures.By, ct)).IsSuccess);
+        Assert.True((await services.GetRequiredService<ICompartments>().CreateAsync(Fixtures.Acme, "Acme SA", Fixtures.By, ct)).IsSuccess);
         var users = services.GetRequiredService<IUserDirectory>();
-        Assert.True((await users.RecordAsync(Fixtures.Jane, "jane@acme.test", "Jane Admin", ct)).IsSuccess);
-        Assert.True((await users.RecordAsync(Fixtures.John, "john@acme.test", "John Doe", ct)).IsSuccess);
+        Assert.True((await users.RecordAsync(Fixtures.Jane, "jane@acme.test", "Jane Admin", Fixtures.By, ct)).IsSuccess);
+        Assert.True((await users.RecordAsync(Fixtures.John, "john@acme.test", "John Doe", Fixtures.By, ct)).IsSuccess);
         app.Sink().Clear();
     }
 

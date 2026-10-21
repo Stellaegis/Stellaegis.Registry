@@ -173,12 +173,13 @@ internal sealed class PostgreSqlRegistryStore
         return await uow.Repo<MembershipRepository>().ListAsync(subject: null, compartment: null, role: role, cancellationToken).ConfigureAwait(false);
     }
 
-    async Task IMembershipStore.AddAsync(string subject, Compartment compartment, CancellationToken cancellationToken)
+    async Task IMembershipStore.AddAsync(string subject, Compartment compartment, Stamp granted, CancellationToken cancellationToken)
     {
         Guard.NotWhiteSpace(subject);
         Guard.NotNull(compartment);
+        Guard.NotNull(granted);
         await using var uow = await _units.OpenAsync(cancellationToken).ConfigureAwait(false);
-        await uow.Repo<MembershipRepository>().InsertAsync(subject, compartment.Value, cancellationToken).ConfigureAwait(false);
+        await uow.Repo<MembershipRepository>().InsertAsync(subject, compartment.Value, granted, cancellationToken).ConfigureAwait(false);
     }
 
     async Task IMembershipStore.RemoveAsync(string subject, Compartment compartment, CancellationToken cancellationToken)
@@ -189,13 +190,14 @@ internal sealed class PostgreSqlRegistryStore
         await uow.Repo<MembershipRepository>().DeleteAsync(subject, compartment.Value, cancellationToken).ConfigureAwait(false);
     }
 
-    async Task IMembershipStore.AssignRoleAsync(string subject, Compartment compartment, string role, CancellationToken cancellationToken)
+    async Task IMembershipStore.AssignRoleAsync(string subject, Compartment compartment, string role, Stamp granted, CancellationToken cancellationToken)
     {
         Guard.NotWhiteSpace(subject);
         Guard.NotNull(compartment);
         Guard.NotWhiteSpace(role);
+        Guard.NotNull(granted);
         await using var uow = await _units.OpenAsync(cancellationToken).ConfigureAwait(false);
-        await uow.Repo<MembershipRepository>().InsertRoleAsync(subject, compartment.Value, role, cancellationToken).ConfigureAwait(false);
+        await uow.Repo<MembershipRepository>().InsertRoleAsync(subject, compartment.Value, role, granted, cancellationToken).ConfigureAwait(false);
     }
 
     async Task IMembershipStore.UnassignRoleAsync(string subject, Compartment compartment, string role, CancellationToken cancellationToken)
@@ -236,12 +238,13 @@ internal sealed class PostgreSqlRegistryStore
         return await uow.Repo<OperatorRepository>().ListByRoleAsync(role, cancellationToken).ConfigureAwait(false);
     }
 
-    async Task IOperatorStore.AssignAsync(string subject, string role, CancellationToken cancellationToken)
+    async Task IOperatorStore.AssignAsync(string subject, string role, Stamp granted, CancellationToken cancellationToken)
     {
         Guard.NotWhiteSpace(subject);
         Guard.NotWhiteSpace(role);
+        Guard.NotNull(granted);
         await using var uow = await _units.OpenAsync(cancellationToken).ConfigureAwait(false);
-        await uow.Repo<OperatorRepository>().InsertAsync(subject, role, cancellationToken).ConfigureAwait(false);
+        await uow.Repo<OperatorRepository>().InsertAsync(subject, role, granted, cancellationToken).ConfigureAwait(false);
     }
 
     async Task IOperatorStore.UnassignAsync(string subject, string role, CancellationToken cancellationToken)

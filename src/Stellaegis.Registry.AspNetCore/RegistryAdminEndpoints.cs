@@ -16,7 +16,8 @@ namespace Stellaegis.Registry.AspNetCore;
 /// <remarks>
 /// <para>
 /// The module has no compartments: it acts <em>on</em> them, from the shared space. Its routes read no request
-/// context, the actor of a write is read from the principal the host authenticated, and the host's rights system
+/// context, the actor of a write is read from the principal the host authenticated — the registry keeps it on
+/// the row it writes, and the host's journal gets it too —, and the host's rights system
 /// decides them in the shared space — an operator of the platform who is also a member of a compartment is, in
 /// that compartment, in the situation of any member. A compartment, a user or a role is nobody's resource, so
 /// the routes declare they load none: the operation each is labelled with is the whole decision.
@@ -108,7 +109,7 @@ public static class RegistryAdminEndpoints
             {
                 if (request is null || !Compartment.TryParse(request.Compartment, out var parsed) || string.IsNullOrWhiteSpace(request.DisplayName))
                     return Invalid("A compartment has a name in the grammar of a compartment and a display name.");
-                var created = await service.CreateAsync(parsed, request.DisplayName, ct);
+                var created = await service.CreateAsync(parsed, request.DisplayName, Callers.ActorOf(http), ct);
                 Written(http, loggers, "created compartment {Compartment}", parsed);
                 return created.IsSuccess ? Results.Created((string?)null, CompartmentSummary.Of(created.Value)) : created.ToHttpResult();
             })
@@ -124,25 +125,25 @@ public static class RegistryAdminEndpoints
                 if (request is null || string.IsNullOrWhiteSpace(request.DisplayName))
                     return Invalid("A compartment has a display name.");
                 Written(http, loggers, "renamed compartment {Compartment}", parsed);
-                return Summary(await service.RenameAsync(parsed, request.DisplayName, ct), CompartmentSummary.Of);
+                return Summary(await service.RenameAsync(parsed, request.DisplayName, Callers.ActorOf(http), ct), CompartmentSummary.Of);
             })
             .WithMetadata(RegistryOperations.CompartmentsWrite)
             .Produces<CompartmentSummary>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status404NotFound);
 
-        MapTransition(compartments, "suspend", (service, compartment, ct) => service.SuspendAsync(compartment, ct));
-        MapTransition(compartments, "resume", (service, compartment, ct) => service.ResumeAsync(compartment, ct));
-        MapTransition(compartments, "terminate", (service, compartment, ct) => service.TerminateAsync(compartment, ct));
+        MapTransition(compartments, "suspend", (service, compartment, actor, ct) => service.SuspendAsync(compartment, actor, ct));
+        MapTransition(compartments, "resume", (service, compartment, actor, ct) => service.ResumeAsync(compartment, actor, ct));
+        MapTransition(compartments, "terminate", (service, compartment, actor, ct) => service.TerminateAsync(compartment, actor, ct));
     }
 
-    private static void MapTransition(RouteGroupBuilder compartments, string verb, Func<ICompartments, Compartment, CancellationToken, Task<Result<CompartmentRecord>>> transition)
+    private static void MapTransition(RouteGroupBuilder compartments, string verb, Func<ICompartments, Compartment, Actor, CancellationToken, Task<Result<CompartmentRecord>>> transition)
         => compartments.MapPost($"/{{compartment}}/{verb}", async (string compartment, HttpContext http, ICompartments service, ILoggerFactory loggers, CancellationToken ct) =>
             {
                 if (!Compartment.TryParse(compartment, out var parsed))
                     return NotACompartment(compartment);
                 Written(http, loggers, verb + "d compartment {Compartment}", parsed);
-                return Summary(await transition(service, parsed, ct), CompartmentSummary.Of);
+                return Summary(await transition(service, parsed, Callers.ActorOf(http), ct), CompartmentSummary.Of);
             })
             .WithMetadata(RegistryOperations.CompartmentsWrite)
             .Produces<CompartmentSummary>(StatusCodes.Status200OK)
@@ -169,7 +170,7 @@ public static class RegistryAdminEndpoints
                 if (!RegistryRules.IsSubject(subject))
                     return NotASubject(subject);
                 Written(http, loggers, "deactivated user {Subject}", subject);
-                return Summary(await directory.DeactivateAsync(subject, ct), UserSummary.Of);
+                return Summary(await directory.DeactivateAsync(subject, Callers.ActorOf(http), ct), UserSummary.Of);
             })
             .WithMetadata(RegistryOperations.UsersWrite)
             .Produces<UserSummary>(StatusCodes.Status200OK)
@@ -180,7 +181,7 @@ public static class RegistryAdminEndpoints
                 if (!RegistryRules.IsSubject(subject))
                     return NotASubject(subject);
                 Written(http, loggers, "reactivated user {Subject}", subject);
-                return Summary(await directory.ReactivateAsync(subject, ct), UserSummary.Of);
+                return Summary(await directory.ReactivateAsync(subject, Callers.ActorOf(http), ct), UserSummary.Of);
             })
             .WithMetadata(RegistryOperations.UsersWrite)
             .Produces<UserSummary>(StatusCodes.Status200OK)
@@ -234,7 +235,7 @@ public static class RegistryAdminEndpoints
                     return Invalid("A role has a name — an identifier —, a scope, a display name and an array of operations.");
                 if (!Statuses.TryParseScope(request.Scope, out var scope))
                     return Invalid("A scope is compartment or platform.");
-                var created = await service.CreateAsync(request.Name, scope, request.DisplayName, request.Operations, ct);
+                var created = await service.CreateAsync(request.Name, scope, request.DisplayName, request.Operations, Callers.ActorOf(http), ct);
                 Written(http, loggers, "created role {Role}", request.Name);
                 return created.IsSuccess ? Results.Created((string?)null, RoleSummary.Of(created.Value)) : created.ToHttpResult();
             })
@@ -250,7 +251,7 @@ public static class RegistryAdminEndpoints
                 if (request is null || string.IsNullOrWhiteSpace(request.DisplayName) || request.Operations is null)
                     return Invalid("A role has a display name and an array of operations.");
                 Written(http, loggers, "changed role {Role}", role);
-                return Summary(await service.UpdateAsync(role, request.DisplayName, request.Operations, ct), RoleSummary.Of);
+                return Summary(await service.UpdateAsync(role, request.DisplayName, request.Operations, Callers.ActorOf(http), ct), RoleSummary.Of);
             })
             .WithMetadata(RegistryOperations.RolesWrite)
             .Produces<RoleSummary>(StatusCodes.Status200OK)
@@ -262,7 +263,7 @@ public static class RegistryAdminEndpoints
                 if (!RegistryRules.IsRoleName(role))
                     return NotARole(role);
                 Written(http, loggers, "deleted role {Role}", role);
-                return (await service.DeleteAsync(role, ct)).ToHttpResult();
+                return (await service.DeleteAsync(role, Callers.ActorOf(http), ct)).ToHttpResult();
             })
             .WithMetadata(RegistryOperations.RolesWrite)
             .Produces(StatusCodes.Status204NoContent)
@@ -293,7 +294,7 @@ public static class RegistryAdminEndpoints
                 if (!RegistryRules.IsSubject(subject))
                     return NotASubject(subject);
                 Written(http, loggers, "added member {Subject} to {Compartment}", subject, parsed);
-                return (await service.AddAsync(subject, parsed, ct)).ToHttpResult();
+                return (await service.AddAsync(subject, parsed, Callers.ActorOf(http), ct)).ToHttpResult();
             })
             .WithMetadata(RegistryOperations.MembershipsWrite)
             .Produces(StatusCodes.Status204NoContent)
@@ -307,7 +308,7 @@ public static class RegistryAdminEndpoints
                 if (!RegistryRules.IsSubject(subject))
                     return NotASubject(subject);
                 Written(http, loggers, "removed member {Subject} from {Compartment}", subject, parsed);
-                return (await service.RemoveAsync(subject, parsed, ct)).ToHttpResult();
+                return (await service.RemoveAsync(subject, parsed, Callers.ActorOf(http), ct)).ToHttpResult();
             })
             .WithMetadata(RegistryOperations.MembershipsWrite)
             .Produces(StatusCodes.Status204NoContent)
@@ -322,7 +323,7 @@ public static class RegistryAdminEndpoints
                 if (!RegistryRules.IsRoleName(role))
                     return NotARole(role);
                 Written(http, loggers, "assigned role {Role} to {Subject} in {Compartment}", role, subject, parsed);
-                return (await service.AssignRoleAsync(subject, parsed, role, ct)).ToHttpResult();
+                return (await service.AssignRoleAsync(subject, parsed, role, Callers.ActorOf(http), ct)).ToHttpResult();
             })
             .WithMetadata(RegistryOperations.MembershipsWrite)
             .Produces(StatusCodes.Status204NoContent)
@@ -339,7 +340,7 @@ public static class RegistryAdminEndpoints
                 if (!RegistryRules.IsRoleName(role))
                     return NotARole(role);
                 Written(http, loggers, "unassigned role {Role} from {Subject} in {Compartment}", role, subject, parsed);
-                return (await service.UnassignRoleAsync(subject, parsed, role, ct)).ToHttpResult();
+                return (await service.UnassignRoleAsync(subject, parsed, role, Callers.ActorOf(http), ct)).ToHttpResult();
             })
             .WithMetadata(RegistryOperations.MembershipsWrite)
             .Produces(StatusCodes.Status204NoContent)
@@ -367,7 +368,7 @@ public static class RegistryAdminEndpoints
                 if (!RegistryRules.IsRoleName(role))
                     return NotARole(role);
                 Written(http, loggers, "assigned platform role {Role} to {Subject}", role, subject);
-                return (await service.AssignAsync(subject, role, ct)).ToHttpResult();
+                return (await service.AssignAsync(subject, role, Callers.ActorOf(http), ct)).ToHttpResult();
             })
             .WithMetadata(RegistryOperations.OperatorsWrite)
             .Produces(StatusCodes.Status204NoContent)
@@ -382,7 +383,7 @@ public static class RegistryAdminEndpoints
                 if (!RegistryRules.IsRoleName(role))
                     return NotARole(role);
                 Written(http, loggers, "unassigned platform role {Role} from {Subject}", role, subject);
-                return (await service.UnassignAsync(subject, role, ct)).ToHttpResult();
+                return (await service.UnassignAsync(subject, role, Callers.ActorOf(http), ct)).ToHttpResult();
             })
             .WithMetadata(RegistryOperations.OperatorsWrite)
             .Produces(StatusCodes.Status204NoContent)
@@ -400,7 +401,7 @@ public static class RegistryAdminEndpoints
 
     private static IResult NotARole(string value) => Invalid($"'{value}' is not a role name: {NameRules.IdentifierRule}.");
 
-    /// <summary>The trace of a write, with who did it: the registry keeps no audit column, the host's journal does.</summary>
+    /// <summary>The trace of a write in the host's journal, with who did it; the row keeps the same actor.</summary>
     private static void Written(HttpContext http, ILoggerFactory loggers, string what, params object[] arguments)
     {
         var logger = loggers.CreateLogger("Stellaegis.Registry.Administration");

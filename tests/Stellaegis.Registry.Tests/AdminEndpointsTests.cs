@@ -47,6 +47,7 @@ public sealed class AdminEndpointsTests
         var globex = (await created.Content.ReadFromJsonAsync<CompartmentSummary>(Ct))!;
         Assert.Equal("globex", globex.Compartment);
         Assert.Equal("active", globex.Status);
+        Assert.Equal("operator", globex.CreatedBy);   // the actor of the request, kept on the row
 
         var duplicate = await client.PostAsJsonAsync("/api/admin/registry/compartments", new CreateCompartmentRequest("globex", "Again"), Ct);
         Assert.Equal(HttpStatusCode.Conflict, duplicate.StatusCode);
@@ -167,6 +168,7 @@ public sealed class AdminEndpointsTests
         var members = await client.GetFromJsonAsync<MemberSummary[]>("/api/admin/registry/memberships/compartments/acme", Ct);
         var jane = Assert.Single(members!);
         Assert.Equal(["accountant"], jane.Roles);
+        Assert.Equal("operator", jane.GrantedBy);
         var mine = await client.GetFromJsonAsync<MemberSummary[]>($"/api/admin/registry/memberships/users/{Jane}", Ct);
         Assert.Equal("acme", Assert.Single(mine!).Compartment);
 

@@ -118,6 +118,15 @@ public sealed class PostgreSqlFixture : IAsyncLifetime
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
+    /// <summary>Reads one value under the application's role: what a row keeps, read as the application reads it.</summary>
+    public async Task<T?> ScalarAsApplicationAsync<T>(string sql, CancellationToken cancellationToken)
+    {
+        await using var connection = await OpenAsync(asApplication: true, cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        return (T?)await command.ExecuteScalarAsync(cancellationToken);
+    }
+
     /// <summary>Runs a statement under the application's role, as a script or a repair by hand would.</summary>
     public async Task ExecuteAsApplicationAsync(string sql, CancellationToken cancellationToken)
     {

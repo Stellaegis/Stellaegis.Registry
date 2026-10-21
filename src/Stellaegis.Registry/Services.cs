@@ -18,7 +18,10 @@ public interface ICatalog
     Task<IReadOnlyList<CatalogEntry>> ListAsync(CancellationToken cancellationToken = default);
 }
 
-/// <summary>The roles: a name and a set of operations of the catalogue, in one scope.</summary>
+/// <summary>
+/// The roles: a name and a set of operations of the catalogue, in one scope. Every write names the actor who
+/// makes it, which the row keeps and the event carries.
+/// </summary>
 public interface IRoles
 {
     /// <summary>
@@ -26,16 +29,16 @@ public interface IRoles
     /// when present and declared. A role of the same name created by hand is refused (<see cref="RegistryErrors.RoleNotDeclared"/>).
     /// Every holder of a changed role has their rights recomputed.
     /// </summary>
-    Task<Result> DeclareAsync(IEnumerable<RoleDeclaration> declarations, CancellationToken cancellationToken = default);
+    Task<Result> DeclareAsync(IEnumerable<RoleDeclaration> declarations, Actor actor, CancellationToken cancellationToken = default);
 
     /// <summary>Creates a role by hand.</summary>
-    Task<Result<Role>> CreateAsync(string name, RoleScope scope, string displayName, IReadOnlyCollection<string> operations, CancellationToken cancellationToken = default);
+    Task<Result<Role>> CreateAsync(string name, RoleScope scope, string displayName, IReadOnlyCollection<string> operations, Actor actor, CancellationToken cancellationToken = default);
 
     /// <summary>Changes the display name and the operations of a role; every holder has their rights recomputed. The installation resets a declared role.</summary>
-    Task<Result<Role>> UpdateAsync(string name, string displayName, IReadOnlyCollection<string> operations, CancellationToken cancellationToken = default);
+    Task<Result<Role>> UpdateAsync(string name, string displayName, IReadOnlyCollection<string> operations, Actor actor, CancellationToken cancellationToken = default);
 
     /// <summary>Deletes a role created by hand that nobody holds.</summary>
-    Task<Result> DeleteAsync(string name, CancellationToken cancellationToken = default);
+    Task<Result> DeleteAsync(string name, Actor actor, CancellationToken cancellationToken = default);
 
     /// <summary>The role, or a failure.</summary>
     Task<Result<Role>> GetAsync(string name, CancellationToken cancellationToken = default);
@@ -44,23 +47,23 @@ public interface IRoles
     Task<IReadOnlyList<Role>> ListAsync(RoleScope? scope = null, CancellationToken cancellationToken = default);
 }
 
-/// <summary>The compartments. A compartment is never deleted: terminated, its name stays taken.</summary>
+/// <summary>The compartments. A compartment is never deleted: terminated, its name stays taken. Every write names its actor.</summary>
 public interface ICompartments
 {
     /// <summary>Creates the compartment, active.</summary>
-    Task<Result<CompartmentRecord>> CreateAsync(Compartment compartment, string displayName, CancellationToken cancellationToken = default);
+    Task<Result<CompartmentRecord>> CreateAsync(Compartment compartment, string displayName, Actor actor, CancellationToken cancellationToken = default);
 
     /// <summary>Renames the compartment.</summary>
-    Task<Result<CompartmentRecord>> RenameAsync(Compartment compartment, string displayName, CancellationToken cancellationToken = default);
+    Task<Result<CompartmentRecord>> RenameAsync(Compartment compartment, string displayName, Actor actor, CancellationToken cancellationToken = default);
 
     /// <summary>Suspends the compartment: its members keep their roles in the registry and hold no right until it resumes.</summary>
-    Task<Result<CompartmentRecord>> SuspendAsync(Compartment compartment, CancellationToken cancellationToken = default);
+    Task<Result<CompartmentRecord>> SuspendAsync(Compartment compartment, Actor actor, CancellationToken cancellationToken = default);
 
     /// <summary>Resumes the compartment: its members hold their rights again.</summary>
-    Task<Result<CompartmentRecord>> ResumeAsync(Compartment compartment, CancellationToken cancellationToken = default);
+    Task<Result<CompartmentRecord>> ResumeAsync(Compartment compartment, Actor actor, CancellationToken cancellationToken = default);
 
     /// <summary>Terminates the compartment: its memberships are gone, from the registry and from the decision point, and its name stays taken.</summary>
-    Task<Result<CompartmentRecord>> TerminateAsync(Compartment compartment, CancellationToken cancellationToken = default);
+    Task<Result<CompartmentRecord>> TerminateAsync(Compartment compartment, Actor actor, CancellationToken cancellationToken = default);
 
     /// <summary>The compartment, or a failure.</summary>
     Task<Result<CompartmentRecord>> GetAsync(Compartment compartment, CancellationToken cancellationToken = default);
@@ -69,17 +72,20 @@ public interface ICompartments
     Task<IReadOnlyList<CompartmentRecord>> ListAsync(CancellationToken cancellationToken = default);
 }
 
-/// <summary>The users, projected from Identity: the host calls <see cref="RecordAsync"/> from its subscription to the registration, <see cref="DeactivateAsync"/> from the blocking.</summary>
+/// <summary>
+/// The users, projected from Identity: the host calls <see cref="RecordAsync"/> from its subscription to the
+/// registration — the actor being the person themselves —, <see cref="DeactivateAsync"/> from the blocking.
+/// </summary>
 public interface IUserDirectory
 {
     /// <summary>Records the user, active, or updates their e-mail and display name.</summary>
-    Task<Result<UserRecord>> RecordAsync(string subject, string email, string displayName, CancellationToken cancellationToken = default);
+    Task<Result<UserRecord>> RecordAsync(string subject, string email, string displayName, Actor actor, CancellationToken cancellationToken = default);
 
     /// <summary>Deactivates the user: they keep their memberships and roles in the registry and hold no right anywhere.</summary>
-    Task<Result<UserRecord>> DeactivateAsync(string subject, CancellationToken cancellationToken = default);
+    Task<Result<UserRecord>> DeactivateAsync(string subject, Actor actor, CancellationToken cancellationToken = default);
 
     /// <summary>Reactivates the user: they hold their rights again.</summary>
-    Task<Result<UserRecord>> ReactivateAsync(string subject, CancellationToken cancellationToken = default);
+    Task<Result<UserRecord>> ReactivateAsync(string subject, Actor actor, CancellationToken cancellationToken = default);
 
     /// <summary>The user, or a failure.</summary>
     Task<Result<UserRecord>> GetAsync(string subject, CancellationToken cancellationToken = default);
@@ -88,20 +94,20 @@ public interface IUserDirectory
     Task<IReadOnlyList<UserRecord>> ListAsync(CancellationToken cancellationToken = default);
 }
 
-/// <summary>The memberships, and the compartment roles of the members.</summary>
+/// <summary>The memberships, and the compartment roles of the members. Every write names its actor, which the grant keeps.</summary>
 public interface IMemberships
 {
     /// <summary>Makes the user a member of the compartment, without any role yet.</summary>
-    Task<Result> AddAsync(string subject, Compartment compartment, CancellationToken cancellationToken = default);
+    Task<Result> AddAsync(string subject, Compartment compartment, Actor actor, CancellationToken cancellationToken = default);
 
     /// <summary>Removes the user from the compartment, with their roles there.</summary>
-    Task<Result> RemoveAsync(string subject, Compartment compartment, CancellationToken cancellationToken = default);
+    Task<Result> RemoveAsync(string subject, Compartment compartment, Actor actor, CancellationToken cancellationToken = default);
 
     /// <summary>Assigns a compartment role to a member.</summary>
-    Task<Result> AssignRoleAsync(string subject, Compartment compartment, string role, CancellationToken cancellationToken = default);
+    Task<Result> AssignRoleAsync(string subject, Compartment compartment, string role, Actor actor, CancellationToken cancellationToken = default);
 
     /// <summary>Unassigns a compartment role from a member.</summary>
-    Task<Result> UnassignRoleAsync(string subject, Compartment compartment, string role, CancellationToken cancellationToken = default);
+    Task<Result> UnassignRoleAsync(string subject, Compartment compartment, string role, Actor actor, CancellationToken cancellationToken = default);
 
     /// <summary>The memberships of the user, with their roles.</summary>
     Task<IReadOnlyList<Membership>> ListByUserAsync(string subject, CancellationToken cancellationToken = default);
@@ -110,14 +116,14 @@ public interface IMemberships
     Task<IReadOnlyList<Membership>> ListByCompartmentAsync(Compartment compartment, CancellationToken cancellationToken = default);
 }
 
-/// <summary>The operators of the platform: the platform roles of the users.</summary>
+/// <summary>The operators of the platform: the platform roles of the users. Every write names its actor, which the grant keeps.</summary>
 public interface IOperators
 {
     /// <summary>Assigns a platform role to a user.</summary>
-    Task<Result> AssignAsync(string subject, string role, CancellationToken cancellationToken = default);
+    Task<Result> AssignAsync(string subject, string role, Actor actor, CancellationToken cancellationToken = default);
 
     /// <summary>Unassigns a platform role from a user.</summary>
-    Task<Result> UnassignAsync(string subject, string role, CancellationToken cancellationToken = default);
+    Task<Result> UnassignAsync(string subject, string role, Actor actor, CancellationToken cancellationToken = default);
 
     /// <summary>The platform roles of the user.</summary>
     Task<IReadOnlyList<string>> ListRolesAsync(string subject, CancellationToken cancellationToken = default);
@@ -152,9 +158,10 @@ internal sealed class Roles(
     IEventPublisher publisher,
     TimeProvider time) : IRoles
 {
-    public async Task<Result> DeclareAsync(IEnumerable<RoleDeclaration> declarations, CancellationToken cancellationToken = default)
+    public async Task<Result> DeclareAsync(IEnumerable<RoleDeclaration> declarations, Actor actor, CancellationToken cancellationToken = default)
     {
         Guard.NotNull(declarations);
+        Guard.NotNull(actor);
         foreach (var declaration in declarations)
         {
             if (!RegistryRules.IsRoleName(declaration.Name))
@@ -167,20 +174,27 @@ internal sealed class Roles(
             var existing = await store.GetAsync(declaration.Name, cancellationToken).ConfigureAwait(false);
             if (existing is { Declared: false })
                 return Result.Failure(RegistryErrors.RoleNotDeclared(declaration.Name));
-            var role = new Role(declaration.Name, declaration.Scope, declaration.DisplayName, Declared: true, operations);
-            if (existing is not null && existing == role with { Operations = existing.Operations } && existing.Operations.ToHashSet(StringComparer.Ordinal).SetEquals(operations))
+            if (existing is not null
+                && existing.Scope == declaration.Scope
+                && existing.DisplayName == declaration.DisplayName
+                && existing.Operations.ToHashSet(StringComparer.Ordinal).SetEquals(operations))
                 continue;
+
+            var now = time.GetUtcNow();
+            var role = new Role(declaration.Name, declaration.Scope, declaration.DisplayName, Declared: true, operations,
+                existing is null ? Audit.CreatedBy(actor, now) : existing.Audit.ModifiedBy(actor, now));
             await store.SaveAsync(role, cancellationToken).ConfigureAwait(false);
-            await publisher.PublishAsync(new RoleChangedEvent { OccurredAt = time.GetUtcNow(), Role = role.Name, Exists = true }, cancellationToken).ConfigureAwait(false);
+            await publisher.PublishAsync(new RoleChangedEvent { OccurredAt = now, Role = role.Name, Exists = true, By = actor }, cancellationToken).ConfigureAwait(false);
             if (existing is not null)
                 await projector.ProjectRoleHoldersAsync(role, cancellationToken).ConfigureAwait(false);
         }
         return Result.Success();
     }
 
-    public async Task<Result<Role>> CreateAsync(string name, RoleScope scope, string displayName, IReadOnlyCollection<string> operations, CancellationToken cancellationToken = default)
+    public async Task<Result<Role>> CreateAsync(string name, RoleScope scope, string displayName, IReadOnlyCollection<string> operations, Actor actor, CancellationToken cancellationToken = default)
     {
         Guard.NotNull(operations);
+        Guard.NotNull(actor);
         if (!RegistryRules.IsRoleName(name))
             return Result.Failure<Role>(RegistryErrors.RoleNameInvalid(name));
         if (await store.GetAsync(name, cancellationToken).ConfigureAwait(false) is not null)
@@ -189,15 +203,17 @@ internal sealed class Roles(
         if (unknown is not null)
             return Result.Failure<Role>(RegistryErrors.UnknownOperation(unknown));
 
-        var role = new Role(name, scope, Guard.NotWhiteSpace(displayName), Declared: false, operations.Distinct(StringComparer.Ordinal).ToList());
+        var now = time.GetUtcNow();
+        var role = new Role(name, scope, Guard.NotWhiteSpace(displayName), Declared: false, operations.Distinct(StringComparer.Ordinal).ToList(), Audit.CreatedBy(actor, now));
         await store.SaveAsync(role, cancellationToken).ConfigureAwait(false);
-        await publisher.PublishAsync(new RoleChangedEvent { OccurredAt = time.GetUtcNow(), Role = name, Exists = true }, cancellationToken).ConfigureAwait(false);
+        await publisher.PublishAsync(new RoleChangedEvent { OccurredAt = now, Role = name, Exists = true, By = actor }, cancellationToken).ConfigureAwait(false);
         return Result.Success(role);
     }
 
-    public async Task<Result<Role>> UpdateAsync(string name, string displayName, IReadOnlyCollection<string> operations, CancellationToken cancellationToken = default)
+    public async Task<Result<Role>> UpdateAsync(string name, string displayName, IReadOnlyCollection<string> operations, Actor actor, CancellationToken cancellationToken = default)
     {
         Guard.NotNull(operations);
+        Guard.NotNull(actor);
         var existing = await store.GetAsync(name, cancellationToken).ConfigureAwait(false);
         if (existing is null)
             return Result.Failure<Role>(RegistryErrors.RoleNotFound(name));
@@ -205,15 +221,22 @@ internal sealed class Roles(
         if (unknown is not null)
             return Result.Failure<Role>(RegistryErrors.UnknownOperation(unknown));
 
-        var role = existing with { DisplayName = Guard.NotWhiteSpace(displayName), Operations = operations.Distinct(StringComparer.Ordinal).ToList() };
+        var now = time.GetUtcNow();
+        var role = existing with
+        {
+            DisplayName = Guard.NotWhiteSpace(displayName),
+            Operations = operations.Distinct(StringComparer.Ordinal).ToList(),
+            Audit = existing.Audit.ModifiedBy(actor, now),
+        };
         await store.SaveAsync(role, cancellationToken).ConfigureAwait(false);
-        await publisher.PublishAsync(new RoleChangedEvent { OccurredAt = time.GetUtcNow(), Role = name, Exists = true }, cancellationToken).ConfigureAwait(false);
+        await publisher.PublishAsync(new RoleChangedEvent { OccurredAt = now, Role = name, Exists = true, By = actor }, cancellationToken).ConfigureAwait(false);
         await projector.ProjectRoleHoldersAsync(role, cancellationToken).ConfigureAwait(false);
         return Result.Success(role);
     }
 
-    public async Task<Result> DeleteAsync(string name, CancellationToken cancellationToken = default)
+    public async Task<Result> DeleteAsync(string name, Actor actor, CancellationToken cancellationToken = default)
     {
+        Guard.NotNull(actor);
         var existing = await store.GetAsync(name, cancellationToken).ConfigureAwait(false);
         if (existing is null)
             return Result.Failure(RegistryErrors.RoleNotFound(name));
@@ -226,7 +249,7 @@ internal sealed class Roles(
             return Result.Failure(RegistryErrors.RoleInUse(name));
 
         await store.DeleteAsync(name, cancellationToken).ConfigureAwait(false);
-        await publisher.PublishAsync(new RoleChangedEvent { OccurredAt = time.GetUtcNow(), Role = name, Exists = false }, cancellationToken).ConfigureAwait(false);
+        await publisher.PublishAsync(new RoleChangedEvent { OccurredAt = time.GetUtcNow(), Role = name, Exists = false, By = actor }, cancellationToken).ConfigureAwait(false);
         return Result.Success();
     }
 
@@ -253,66 +276,72 @@ internal sealed class Compartments(
     IEventPublisher publisher,
     TimeProvider time) : ICompartments
 {
-    public async Task<Result<CompartmentRecord>> CreateAsync(Compartment compartment, string displayName, CancellationToken cancellationToken = default)
+    public async Task<Result<CompartmentRecord>> CreateAsync(Compartment compartment, string displayName, Actor actor, CancellationToken cancellationToken = default)
     {
         Guard.NotNull(compartment);
+        Guard.NotNull(actor);
         if (await store.GetAsync(compartment, cancellationToken).ConfigureAwait(false) is not null)
             return Result.Failure<CompartmentRecord>(RegistryErrors.CompartmentExists(compartment));
-        var record = new CompartmentRecord(compartment, Guard.NotWhiteSpace(displayName), CompartmentStatus.Active, time.GetUtcNow());
+        var now = time.GetUtcNow();
+        var record = new CompartmentRecord(compartment, Guard.NotWhiteSpace(displayName), CompartmentStatus.Active, Audit.CreatedBy(actor, now));
         await store.SaveAsync(record, cancellationToken).ConfigureAwait(false);
-        await publisher.PublishAsync(new CompartmentChangedEvent { OccurredAt = time.GetUtcNow(), Compartment = compartment, Status = record.Status }, cancellationToken).ConfigureAwait(false);
+        await PublishAsync(record, actor, cancellationToken).ConfigureAwait(false);
         return Result.Success(record);
     }
 
-    public async Task<Result<CompartmentRecord>> RenameAsync(Compartment compartment, string displayName, CancellationToken cancellationToken = default)
+    public async Task<Result<CompartmentRecord>> RenameAsync(Compartment compartment, string displayName, Actor actor, CancellationToken cancellationToken = default)
     {
+        Guard.NotNull(actor);
         var current = await LiveAsync(compartment, cancellationToken).ConfigureAwait(false);
         if (current.IsFailure)
             return current;
-        var record = current.Value with { DisplayName = Guard.NotWhiteSpace(displayName) };
+        var record = current.Value with { DisplayName = Guard.NotWhiteSpace(displayName), Audit = current.Value.Audit.ModifiedBy(actor, time.GetUtcNow()) };
         await store.SaveAsync(record, cancellationToken).ConfigureAwait(false);
-        await publisher.PublishAsync(new CompartmentChangedEvent { OccurredAt = time.GetUtcNow(), Compartment = compartment, Status = record.Status }, cancellationToken).ConfigureAwait(false);
+        await PublishAsync(record, actor, cancellationToken).ConfigureAwait(false);
         return Result.Success(record);
     }
 
-    public async Task<Result<CompartmentRecord>> SuspendAsync(Compartment compartment, CancellationToken cancellationToken = default)
+    public async Task<Result<CompartmentRecord>> SuspendAsync(Compartment compartment, Actor actor, CancellationToken cancellationToken = default)
     {
+        Guard.NotNull(actor);
         var current = await LiveAsync(compartment, cancellationToken).ConfigureAwait(false);
         if (current.IsFailure)
             return current;
         if (current.Value.Status == CompartmentStatus.Suspended)
             return current;
-        var record = current.Value with { Status = CompartmentStatus.Suspended };
+        var record = current.Value with { Status = CompartmentStatus.Suspended, Audit = current.Value.Audit.ModifiedBy(actor, time.GetUtcNow()) };
         await store.SaveAsync(record, cancellationToken).ConfigureAwait(false);
         await projector.RemoveCompartmentAsync(compartment, cancellationToken).ConfigureAwait(false);
-        await publisher.PublishAsync(new CompartmentChangedEvent { OccurredAt = time.GetUtcNow(), Compartment = compartment, Status = record.Status }, cancellationToken).ConfigureAwait(false);
+        await PublishAsync(record, actor, cancellationToken).ConfigureAwait(false);
         return Result.Success(record);
     }
 
-    public async Task<Result<CompartmentRecord>> ResumeAsync(Compartment compartment, CancellationToken cancellationToken = default)
+    public async Task<Result<CompartmentRecord>> ResumeAsync(Compartment compartment, Actor actor, CancellationToken cancellationToken = default)
     {
+        Guard.NotNull(actor);
         var current = await LiveAsync(compartment, cancellationToken).ConfigureAwait(false);
         if (current.IsFailure)
             return current;
         if (current.Value.Status == CompartmentStatus.Active)
             return current;
-        var record = current.Value with { Status = CompartmentStatus.Active };
+        var record = current.Value with { Status = CompartmentStatus.Active, Audit = current.Value.Audit.ModifiedBy(actor, time.GetUtcNow()) };
         await store.SaveAsync(record, cancellationToken).ConfigureAwait(false);
         await projector.ProjectCompartmentAsync(compartment, cancellationToken).ConfigureAwait(false);
-        await publisher.PublishAsync(new CompartmentChangedEvent { OccurredAt = time.GetUtcNow(), Compartment = compartment, Status = record.Status }, cancellationToken).ConfigureAwait(false);
+        await PublishAsync(record, actor, cancellationToken).ConfigureAwait(false);
         return Result.Success(record);
     }
 
-    public async Task<Result<CompartmentRecord>> TerminateAsync(Compartment compartment, CancellationToken cancellationToken = default)
+    public async Task<Result<CompartmentRecord>> TerminateAsync(Compartment compartment, Actor actor, CancellationToken cancellationToken = default)
     {
+        Guard.NotNull(actor);
         var current = await LiveAsync(compartment, cancellationToken).ConfigureAwait(false);
         if (current.IsFailure)
             return current;
-        var record = current.Value with { Status = CompartmentStatus.Terminated };
+        var record = current.Value with { Status = CompartmentStatus.Terminated, Audit = current.Value.Audit.ModifiedBy(actor, time.GetUtcNow()) };
         await store.SaveAsync(record, cancellationToken).ConfigureAwait(false);
         await projector.RemoveCompartmentAsync(compartment, cancellationToken).ConfigureAwait(false);
         await memberships.RemoveCompartmentAsync(compartment, cancellationToken).ConfigureAwait(false);
-        await publisher.PublishAsync(new CompartmentChangedEvent { OccurredAt = time.GetUtcNow(), Compartment = compartment, Status = record.Status }, cancellationToken).ConfigureAwait(false);
+        await PublishAsync(record, actor, cancellationToken).ConfigureAwait(false);
         return Result.Success(record);
     }
 
@@ -322,6 +351,9 @@ internal sealed class Compartments(
             : Result.Failure<CompartmentRecord>(RegistryErrors.CompartmentNotFound(compartment));
 
     public Task<IReadOnlyList<CompartmentRecord>> ListAsync(CancellationToken cancellationToken = default) => store.ListAsync(cancellationToken);
+
+    private Task PublishAsync(CompartmentRecord record, Actor actor, CancellationToken cancellationToken)
+        => publisher.PublishAsync(new CompartmentChangedEvent { OccurredAt = time.GetUtcNow(), Compartment = record.Compartment, Status = record.Status, By = actor }, cancellationToken);
 
     /// <summary>The compartment when it exists and is not terminated.</summary>
     private async Task<Result<CompartmentRecord>> LiveAsync(Compartment compartment, CancellationToken cancellationToken)
@@ -342,47 +374,51 @@ internal sealed class UserDirectory(
     IEventPublisher publisher,
     TimeProvider time) : IUserDirectory
 {
-    public async Task<Result<UserRecord>> RecordAsync(string subject, string email, string displayName, CancellationToken cancellationToken = default)
+    public async Task<Result<UserRecord>> RecordAsync(string subject, string email, string displayName, Actor actor, CancellationToken cancellationToken = default)
     {
         subject = RegistryRules.NormalizeSubject(subject);
         Guard.NotWhiteSpace(email);
         Guard.NotWhiteSpace(displayName);
+        Guard.NotNull(actor);
+        var now = time.GetUtcNow();
         var existing = await store.GetAsync(subject, cancellationToken).ConfigureAwait(false);
         var record = existing is null
-            ? new UserRecord(subject, email, displayName, UserStatus.Active, time.GetUtcNow())
-            : existing with { Email = email, DisplayName = displayName };
+            ? new UserRecord(subject, email, displayName, UserStatus.Active, Audit.CreatedBy(actor, now))
+            : existing with { Email = email, DisplayName = displayName, Audit = existing.Audit.ModifiedBy(actor, now) };
         await store.SaveAsync(record, cancellationToken).ConfigureAwait(false);
-        await publisher.PublishAsync(new UserChangedEvent { OccurredAt = time.GetUtcNow(), Subject = subject, Status = record.Status }, cancellationToken).ConfigureAwait(false);
+        await PublishAsync(record, actor, cancellationToken).ConfigureAwait(false);
         return Result.Success(record);
     }
 
-    public async Task<Result<UserRecord>> DeactivateAsync(string subject, CancellationToken cancellationToken = default)
+    public async Task<Result<UserRecord>> DeactivateAsync(string subject, Actor actor, CancellationToken cancellationToken = default)
     {
         subject = RegistryRules.NormalizeSubject(subject);
+        Guard.NotNull(actor);
         var existing = await store.GetAsync(subject, cancellationToken).ConfigureAwait(false);
         if (existing is null)
             return Result.Failure<UserRecord>(RegistryErrors.UserNotFound(subject));
         if (existing.Status == UserStatus.Deactivated)
             return Result.Success(existing);
-        var record = existing with { Status = UserStatus.Deactivated };
+        var record = existing with { Status = UserStatus.Deactivated, Audit = existing.Audit.ModifiedBy(actor, time.GetUtcNow()) };
         await store.SaveAsync(record, cancellationToken).ConfigureAwait(false);
         await projector.RemoveSubjectAsync(subject, cancellationToken).ConfigureAwait(false);
-        await publisher.PublishAsync(new UserChangedEvent { OccurredAt = time.GetUtcNow(), Subject = subject, Status = record.Status }, cancellationToken).ConfigureAwait(false);
+        await PublishAsync(record, actor, cancellationToken).ConfigureAwait(false);
         return Result.Success(record);
     }
 
-    public async Task<Result<UserRecord>> ReactivateAsync(string subject, CancellationToken cancellationToken = default)
+    public async Task<Result<UserRecord>> ReactivateAsync(string subject, Actor actor, CancellationToken cancellationToken = default)
     {
         subject = RegistryRules.NormalizeSubject(subject);
+        Guard.NotNull(actor);
         var existing = await store.GetAsync(subject, cancellationToken).ConfigureAwait(false);
         if (existing is null)
             return Result.Failure<UserRecord>(RegistryErrors.UserNotFound(subject));
         if (existing.Status == UserStatus.Active)
             return Result.Success(existing);
-        var record = existing with { Status = UserStatus.Active };
+        var record = existing with { Status = UserStatus.Active, Audit = existing.Audit.ModifiedBy(actor, time.GetUtcNow()) };
         await store.SaveAsync(record, cancellationToken).ConfigureAwait(false);
         await projector.ProjectSubjectAsync(subject, cancellationToken).ConfigureAwait(false);
-        await publisher.PublishAsync(new UserChangedEvent { OccurredAt = time.GetUtcNow(), Subject = subject, Status = record.Status }, cancellationToken).ConfigureAwait(false);
+        await PublishAsync(record, actor, cancellationToken).ConfigureAwait(false);
         return Result.Success(record);
     }
 
@@ -395,6 +431,9 @@ internal sealed class UserDirectory(
     }
 
     public Task<IReadOnlyList<UserRecord>> ListAsync(CancellationToken cancellationToken = default) => store.ListAsync(cancellationToken);
+
+    private Task PublishAsync(UserRecord record, Actor actor, CancellationToken cancellationToken)
+        => publisher.PublishAsync(new UserChangedEvent { OccurredAt = time.GetUtcNow(), Subject = record.Subject, Status = record.Status, By = actor }, cancellationToken);
 }
 
 internal sealed class Memberships(
@@ -406,36 +445,39 @@ internal sealed class Memberships(
     IEventPublisher publisher,
     TimeProvider time) : IMemberships
 {
-    public async Task<Result> AddAsync(string subject, Compartment compartment, CancellationToken cancellationToken = default)
+    public async Task<Result> AddAsync(string subject, Compartment compartment, Actor actor, CancellationToken cancellationToken = default)
     {
         subject = RegistryRules.NormalizeSubject(subject);
+        Guard.NotNull(actor);
         var check = await CheckAsync(subject, compartment, cancellationToken).ConfigureAwait(false);
         if (check.IsFailure)
             return check;
         if (await store.IsMemberAsync(subject, compartment, cancellationToken).ConfigureAwait(false))
             return Result.Success();
-        await store.AddAsync(subject, compartment, cancellationToken).ConfigureAwait(false);
+        await store.AddAsync(subject, compartment, new Stamp(time.GetUtcNow(), actor), cancellationToken).ConfigureAwait(false);
         await projector.ProjectMembershipsAsync(subject, cancellationToken).ConfigureAwait(false);
-        await publisher.PublishAsync(new MembershipChangedEvent { OccurredAt = time.GetUtcNow(), Subject = subject, Compartment = compartment, IsMember = true }, cancellationToken).ConfigureAwait(false);
+        await PublishAsync(subject, compartment, isMember: true, actor, cancellationToken).ConfigureAwait(false);
         return Result.Success();
     }
 
-    public async Task<Result> RemoveAsync(string subject, Compartment compartment, CancellationToken cancellationToken = default)
+    public async Task<Result> RemoveAsync(string subject, Compartment compartment, Actor actor, CancellationToken cancellationToken = default)
     {
         subject = RegistryRules.NormalizeSubject(subject);
         Guard.NotNull(compartment);
+        Guard.NotNull(actor);
         if (!await store.IsMemberAsync(subject, compartment, cancellationToken).ConfigureAwait(false))
             return Result.Success();
         await store.RemoveAsync(subject, compartment, cancellationToken).ConfigureAwait(false);
         await projector.ProjectMembershipsAsync(subject, cancellationToken).ConfigureAwait(false);
         await projector.ProjectUserGrantsAsync(subject, compartment, cancellationToken).ConfigureAwait(false);
-        await publisher.PublishAsync(new MembershipChangedEvent { OccurredAt = time.GetUtcNow(), Subject = subject, Compartment = compartment, IsMember = false }, cancellationToken).ConfigureAwait(false);
+        await PublishAsync(subject, compartment, isMember: false, actor, cancellationToken).ConfigureAwait(false);
         return Result.Success();
     }
 
-    public async Task<Result> AssignRoleAsync(string subject, Compartment compartment, string role, CancellationToken cancellationToken = default)
+    public async Task<Result> AssignRoleAsync(string subject, Compartment compartment, string role, Actor actor, CancellationToken cancellationToken = default)
     {
         subject = RegistryRules.NormalizeSubject(subject);
+        Guard.NotNull(actor);
         var check = await CheckAsync(subject, compartment, cancellationToken).ConfigureAwait(false);
         if (check.IsFailure)
             return check;
@@ -447,22 +489,23 @@ internal sealed class Memberships(
         if (!await store.IsMemberAsync(subject, compartment, cancellationToken).ConfigureAwait(false))
             return Result.Failure(RegistryErrors.NotMember(subject, compartment));
 
-        await store.AssignRoleAsync(subject, compartment, role, cancellationToken).ConfigureAwait(false);
+        await store.AssignRoleAsync(subject, compartment, role, new Stamp(time.GetUtcNow(), actor), cancellationToken).ConfigureAwait(false);
         await projector.ProjectUserGrantsAsync(subject, compartment, cancellationToken).ConfigureAwait(false);
-        await publisher.PublishAsync(new MembershipChangedEvent { OccurredAt = time.GetUtcNow(), Subject = subject, Compartment = compartment, IsMember = true }, cancellationToken).ConfigureAwait(false);
+        await PublishAsync(subject, compartment, isMember: true, actor, cancellationToken).ConfigureAwait(false);
         return Result.Success();
     }
 
-    public async Task<Result> UnassignRoleAsync(string subject, Compartment compartment, string role, CancellationToken cancellationToken = default)
+    public async Task<Result> UnassignRoleAsync(string subject, Compartment compartment, string role, Actor actor, CancellationToken cancellationToken = default)
     {
         subject = RegistryRules.NormalizeSubject(subject);
         Guard.NotNull(compartment);
         Guard.NotWhiteSpace(role);
+        Guard.NotNull(actor);
         if (!await store.IsMemberAsync(subject, compartment, cancellationToken).ConfigureAwait(false))
             return Result.Failure(RegistryErrors.NotMember(subject, compartment));
         await store.UnassignRoleAsync(subject, compartment, role, cancellationToken).ConfigureAwait(false);
         await projector.ProjectUserGrantsAsync(subject, compartment, cancellationToken).ConfigureAwait(false);
-        await publisher.PublishAsync(new MembershipChangedEvent { OccurredAt = time.GetUtcNow(), Subject = subject, Compartment = compartment, IsMember = true }, cancellationToken).ConfigureAwait(false);
+        await PublishAsync(subject, compartment, isMember: true, actor, cancellationToken).ConfigureAwait(false);
         return Result.Success();
     }
 
@@ -471,6 +514,9 @@ internal sealed class Memberships(
 
     public Task<IReadOnlyList<Membership>> ListByCompartmentAsync(Compartment compartment, CancellationToken cancellationToken = default)
         => store.ListByCompartmentAsync(Guard.NotNull(compartment), cancellationToken);
+
+    private Task PublishAsync(string subject, Compartment compartment, bool isMember, Actor actor, CancellationToken cancellationToken)
+        => publisher.PublishAsync(new MembershipChangedEvent { OccurredAt = time.GetUtcNow(), Subject = subject, Compartment = compartment, IsMember = isMember, By = actor }, cancellationToken);
 
     /// <summary>The user exists and is active, the compartment exists and is not terminated.</summary>
     private async Task<Result> CheckAsync(string subject, Compartment compartment, CancellationToken cancellationToken)
@@ -494,11 +540,13 @@ internal sealed class Operators(
     IOperatorStore store,
     IUserStore users,
     IRoleStore roles,
-    RightsProjector projector) : IOperators
+    RightsProjector projector,
+    TimeProvider time) : IOperators
 {
-    public async Task<Result> AssignAsync(string subject, string role, CancellationToken cancellationToken = default)
+    public async Task<Result> AssignAsync(string subject, string role, Actor actor, CancellationToken cancellationToken = default)
     {
         subject = RegistryRules.NormalizeSubject(subject);
+        Guard.NotNull(actor);
         var user = await users.GetAsync(subject, cancellationToken).ConfigureAwait(false);
         if (user is null)
             return Result.Failure(RegistryErrors.UserNotFound(subject));
@@ -510,15 +558,16 @@ internal sealed class Operators(
         if (record.Scope != RoleScope.Platform)
             return Result.Failure(RegistryErrors.RoleScopeMismatch(role, RoleScope.Platform));
 
-        await store.AssignAsync(subject, role, cancellationToken).ConfigureAwait(false);
+        await store.AssignAsync(subject, role, new Stamp(time.GetUtcNow(), actor), cancellationToken).ConfigureAwait(false);
         await projector.ProjectAdminGrantsAsync(subject, cancellationToken).ConfigureAwait(false);
         return Result.Success();
     }
 
-    public async Task<Result> UnassignAsync(string subject, string role, CancellationToken cancellationToken = default)
+    public async Task<Result> UnassignAsync(string subject, string role, Actor actor, CancellationToken cancellationToken = default)
     {
         subject = RegistryRules.NormalizeSubject(subject);
         Guard.NotWhiteSpace(role);
+        Guard.NotNull(actor);
         await store.UnassignAsync(subject, role, cancellationToken).ConfigureAwait(false);
         await projector.ProjectAdminGrantsAsync(subject, cancellationToken).ConfigureAwait(false);
         return Result.Success();

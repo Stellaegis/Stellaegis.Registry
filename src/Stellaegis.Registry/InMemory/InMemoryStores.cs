@@ -14,9 +14,9 @@ public sealed class InMemoryRegistryData
 
     internal ConcurrentDictionary<string, Role> Roles { get; } = new(StringComparer.Ordinal);
 
-    internal ConcurrentDictionary<(string Subject, Compartment Compartment), HashSet<string>> Memberships { get; } = new();
+    internal ConcurrentDictionary<(string Subject, Compartment Compartment), MembershipEntry> Memberships { get; } = new();
 
-    internal ConcurrentDictionary<string, HashSet<string>> Operators { get; } = new(StringComparer.Ordinal);
+    internal ConcurrentDictionary<string, Dictionary<string, Stamp>> Operators { get; } = new(StringComparer.Ordinal);
 
     /// <summary>Forgets everything.</summary>
     public void Clear()
@@ -29,10 +29,18 @@ public sealed class InMemoryRegistryData
         Operators.Clear();
     }
 
-    internal static IReadOnlyCollection<string> Snapshot(HashSet<string> set)
+    internal static IReadOnlyCollection<string> Snapshot(Dictionary<string, Stamp> set)
     {
         lock (set)
-            return set.Order(StringComparer.Ordinal).ToList();
+            return set.Keys.Order(StringComparer.Ordinal).ToList();
+    }
+
+    /// <summary>A membership: who granted it and when, and the roles with who granted each and when.</summary>
+    internal sealed class MembershipEntry(Stamp granted)
+    {
+        public Stamp Granted { get; } = granted;
+
+        public Dictionary<string, Stamp> Roles { get; } = new(StringComparer.Ordinal);
     }
 }
 
@@ -112,11 +120,11 @@ internal sealed class InMemoryMembershipStore(InMemoryRegistryData data) : IMemb
         => Task.FromResult(List(pair => pair.Key.Compartment == compartment));
 
     public Task<IReadOnlyList<Membership>> ListByRoleAsync(string role, CancellationToken cancellationToken = default)
-        => Task.FromResult(List(pair => { lock (pair.Value) return pair.Value.Contains(role); }));
+        => Task.FromResult(List(pair => { lock (pair.Value.Roles) return pair.Value.Roles.ContainsKey(role); }));
 
-    public Task AddAsync(string subject, Compartment compartment, CancellationToken cancellationToken = default)
+    public Task AddAsync(string subject, Compartment compartment, Stamp granted, CancellationToken cancellationToken = default)
     {
-        data.Memberships.TryAdd((subject, compartment), new HashSet<string>(StringComparer.Ordinal));
+        data.Memberships.TryAdd((subject, compartment), new InMemoryRegistryData.MembershipEntry(granted));
         return Task.CompletedTask;
     }
 
@@ -126,19 +134,19 @@ internal sealed class InMemoryMembershipStore(InMemoryRegistryData data) : IMemb
         return Task.CompletedTask;
     }
 
-    public Task AssignRoleAsync(string subject, Compartment compartment, string role, CancellationToken cancellationToken = default)
+    public Task AssignRoleAsync(string subject, Compartment compartment, string role, Stamp granted, CancellationToken cancellationToken = default)
     {
-        if (data.Memberships.TryGetValue((subject, compartment), out var set))
-            lock (set)
-                set.Add(role);
+        if (data.Memberships.TryGetValue((subject, compartment), out var entry))
+            lock (entry.Roles)
+                entry.Roles.TryAdd(role, granted);
         return Task.CompletedTask;
     }
 
     public Task UnassignRoleAsync(string subject, Compartment compartment, string role, CancellationToken cancellationToken = default)
     {
-        if (data.Memberships.TryGetValue((subject, compartment), out var set))
-            lock (set)
-                set.Remove(role);
+        if (data.Memberships.TryGetValue((subject, compartment), out var entry))
+            lock (entry.Roles)
+                entry.Roles.Remove(role);
         return Task.CompletedTask;
     }
 
@@ -149,12 +157,12 @@ internal sealed class InMemoryMembershipStore(InMemoryRegistryData data) : IMemb
         return Task.CompletedTask;
     }
 
-    private IReadOnlyList<Membership> List(Func<KeyValuePair<(string Subject, Compartment Compartment), HashSet<string>>, bool> where)
+    private IReadOnlyList<Membership> List(Func<KeyValuePair<(string Subject, Compartment Compartment), InMemoryRegistryData.MembershipEntry>, bool> where)
         => data.Memberships
             .Where(where)
             .OrderBy(pair => pair.Key.Subject, StringComparer.Ordinal)
             .ThenBy(pair => pair.Key.Compartment.Value, StringComparer.Ordinal)
-            .Select(pair => new Membership(pair.Key.Subject, pair.Key.Compartment, InMemoryRegistryData.Snapshot(pair.Value)))
+            .Select(pair => new Membership(pair.Key.Subject, pair.Key.Compartment, InMemoryRegistryData.Snapshot(pair.Value.Roles), pair.Value.Granted))
             .ToList();
 }
 
@@ -172,16 +180,16 @@ internal sealed class InMemoryOperatorStore(InMemoryRegistryData data) : IOperat
 
     public Task<IReadOnlyList<string>> ListByRoleAsync(string role, CancellationToken cancellationToken = default)
         => Task.FromResult<IReadOnlyList<string>>(data.Operators
-            .Where(pair => { lock (pair.Value) return pair.Value.Contains(role); })
+            .Where(pair => { lock (pair.Value) return pair.Value.ContainsKey(role); })
             .Select(pair => pair.Key)
             .Order(StringComparer.Ordinal)
             .ToList());
 
-    public Task AssignAsync(string subject, string role, CancellationToken cancellationToken = default)
+    public Task AssignAsync(string subject, string role, Stamp granted, CancellationToken cancellationToken = default)
     {
-        var set = data.Operators.GetOrAdd(subject, _ => new HashSet<string>(StringComparer.Ordinal));
+        var set = data.Operators.GetOrAdd(subject, _ => new Dictionary<string, Stamp>(StringComparer.Ordinal));
         lock (set)
-            set.Add(role);
+            set.TryAdd(role, granted);
         return Task.CompletedTask;
     }
 

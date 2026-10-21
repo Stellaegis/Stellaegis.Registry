@@ -39,28 +39,29 @@ public sealed class ModuleTests
         using var host = new TestHost();
         var hyphenated = Guid.Parse(Jane).ToString("D");
 
-        var first = await host.Users.RecordAsync(hyphenated, "jane@acme.test", "Jane", Ct);
-        var again = await host.Users.RecordAsync(Jane, "jane.admin@acme.test", "Jane Admin", Ct);
+        var first = await host.Users.RecordAsync(hyphenated, "jane@acme.test", "Jane", By, Ct);
+        var again = await host.Users.RecordAsync(Jane, "jane.admin@acme.test", "Jane Admin", By, Ct);
 
         Assert.Equal(Jane, first.Value.Subject);
-        Assert.Equal(first.Value.CreatedAt, again.Value.CreatedAt);
+        Assert.Equal(first.Value.Audit.Created, again.Value.Audit.Created);
+        Assert.Equal(By, again.Value.Audit.Modified.By);
         Assert.Equal("Jane Admin", (await host.Users.GetAsync(hyphenated, Ct)).Value.DisplayName);
         Assert.Single(await host.Users.ListAsync(Ct));
         Assert.Throws<ArgumentException>(() => RegistryRules.NormalizeSubject("c_acme_robot"));
-        Assert.Equal(RegistryErrors.UserNotFoundCode, (await host.Users.DeactivateAsync(John, Ct)).Error!.Code);
+        Assert.Equal(RegistryErrors.UserNotFoundCode, (await host.Users.DeactivateAsync(John, By, Ct)).Error!.Code);
     }
 
     [Fact]
     public async Task A_compartment_is_renamed_and_listed_with_the_terminated_ones()
     {
         using var host = await new TestHost().InstalledAsync(Ct);
-        Assert.True((await host.Compartments.CreateAsync(Globex, "Globex", Ct)).IsSuccess);
+        Assert.True((await host.Compartments.CreateAsync(Globex, "Globex", By, Ct)).IsSuccess);
 
-        Assert.Equal("Globex Corp.", (await host.Compartments.RenameAsync(Globex, "Globex Corp.", Ct)).Value.DisplayName);
-        Assert.True((await host.Compartments.TerminateAsync(Globex, Ct)).IsSuccess);
+        Assert.Equal("Globex Corp.", (await host.Compartments.RenameAsync(Globex, "Globex Corp.", By, Ct)).Value.DisplayName);
+        Assert.True((await host.Compartments.TerminateAsync(Globex, By, Ct)).IsSuccess);
 
         Assert.Equal([Acme, Globex], (await host.Compartments.ListAsync(Ct)).Select(c => c.Compartment));
-        Assert.Equal(RegistryErrors.CompartmentTerminatedCode, (await host.Compartments.RenameAsync(Globex, "x", Ct)).Error!.Code);
+        Assert.Equal(RegistryErrors.CompartmentTerminatedCode, (await host.Compartments.RenameAsync(Globex, "x", By, Ct)).Error!.Code);
         Assert.Equal(RegistryErrors.CompartmentNotFoundCode, (await host.Compartments.GetAsync(Compartment.Parse("nobody"), Ct)).Error!.Code);
     }
 }

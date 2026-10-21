@@ -18,6 +18,11 @@
 -- protect: a role names operations of the catalogue, a member role names a membership and a role,
 -- an operator role names a user and a role; a role still held is not deleted. All constraints
 -- explicitly named.
+--
+-- Every write carries its actor: created_by and modified_by on the rows that are created once and
+-- changed after, granted_by on the grants. Never defaulted — an actor forgotten is an error, not
+-- "system" — and in the grammar of an actor of Primitives: 1 to 128 characters, no control
+-- character, no surrounding whitespace. The timestamps go with them.
 -- ============================================================================
 
 -- ── Grammars ─────────────────────────────────────────────────────────────────
@@ -28,6 +33,7 @@
 -- An operation is an identity target.name: each part 1 to 63 lowercase letters, digits and single
 -- underscores, starting with a letter and ending with a letter or a digit.
 -- A role name is an identifier: the grammar of one part of an operation.
+-- An actor is 1 to 128 characters without control characters nor surrounding whitespace.
 -- The checks below repeat those grammars so that a row written past the module — a script, a repair
 -- by hand — cannot hold what the registry would never produce.
 
@@ -41,17 +47,24 @@ create table reg.compartments (
   display_name  text         not null,
   status        varchar(10)  not null,
   created_at    timestamptz  not null,
+  created_by    varchar(128) not null,
+  modified_at   timestamptz  not null,
+  modified_by   varchar(128) not null,
 
   constraint pk_compartments primary key (compartment),
   constraint ck_compartments_compartment check (
     compartment ~ '^[a-z][a-z0-9-]{1,61}[a-z0-9]$' and compartment !~ '--'),
   constraint ck_compartments_display_name check (char_length(display_name) between 1 and 200),
-  constraint ck_compartments_status check (status in ('active', 'suspended', 'terminated'))
+  constraint ck_compartments_status check (status in ('active', 'suspended', 'terminated')),
+  constraint ck_compartments_created_by check (created_by ~ '^[^[:space:][:cntrl:]]([^[:cntrl:]]{0,126}[^[:space:][:cntrl:]])?$'),
+  constraint ck_compartments_modified_by check (modified_by ~ '^[^[:space:][:cntrl:]]([^[:cntrl:]]{0,126}[^[:space:][:cntrl:]])?$')
 );
 
 comment on table  reg.compartments              is 'The compartments of the application. One row per compartment, never deleted: a name is never reused.';
 comment on column reg.compartments.compartment  is 'The name of the compartment, the one the frame and the routes use.';
 comment on column reg.compartments.status       is 'active, suspended (rights withdrawn, memberships kept) or terminated (memberships gone, the row stays).';
+comment on column reg.compartments.created_by   is 'The actor who created the compartment: the installation, or an operator. Never defaulted.';
+comment on column reg.compartments.modified_by  is 'The actor of the last change; the creator, until a change.';
 
 -- ── Users ────────────────────────────────────────────────────────────────────
 -- The projection of the accounts of Identity: who exists, to give a membership or a role to. The
@@ -63,17 +76,24 @@ create table reg.users (
   display_name  text         not null,
   status        varchar(11)  not null,
   created_at    timestamptz  not null,
+  created_by    varchar(128) not null,
+  modified_at   timestamptz  not null,
+  modified_by   varchar(128) not null,
 
   constraint pk_users primary key (subject),
   constraint ck_users_subject check (subject ~ '^[0-9a-f]{32}$'),
   constraint ck_users_email check (char_length(email) between 1 and 320),
   constraint ck_users_display_name check (char_length(display_name) between 1 and 200),
-  constraint ck_users_status check (status in ('active', 'deactivated'))
+  constraint ck_users_status check (status in ('active', 'deactivated')),
+  constraint ck_users_created_by check (created_by ~ '^[^[:space:][:cntrl:]]([^[:cntrl:]]{0,126}[^[:space:][:cntrl:]])?$'),
+  constraint ck_users_modified_by check (modified_by ~ '^[^[:space:][:cntrl:]]([^[:cntrl:]]{0,126}[^[:space:][:cntrl:]])?$')
 );
 
 comment on table  reg.users          is 'The projection of the accounts of Identity. One row per subject.';
 comment on column reg.users.subject  is 'The sub of the account: a GUID written as 32 hex digits.';
 comment on column reg.users.status   is 'active, or deactivated: blocked or deleted in Identity, rights withdrawn, memberships kept.';
+comment on column reg.users.created_by  is 'The actor who recorded the user: the person themselves when they registered, or the installation.';
+comment on column reg.users.modified_by is 'The actor of the last change; the creator, until a change.';
 
 -- ── Catalogue ────────────────────────────────────────────────────────────────
 -- What can be granted: the operations the modules declare, recorded by the installation from the
@@ -109,16 +129,24 @@ create table reg.roles (
   scope         varchar(11)  not null,
   display_name  text         not null,
   declared      boolean      not null,
+  created_at    timestamptz  not null,
+  created_by    varchar(128) not null,
+  modified_at   timestamptz  not null,
+  modified_by   varchar(128) not null,
 
   constraint pk_roles primary key (role),
   constraint ck_roles_role check (role ~ '^[a-z]([a-z0-9_]{0,61}[a-z0-9])?$' and role !~ '__'),
   constraint ck_roles_scope check (scope in ('compartment', 'platform')),
-  constraint ck_roles_display_name check (char_length(display_name) between 1 and 200)
+  constraint ck_roles_display_name check (char_length(display_name) between 1 and 200),
+  constraint ck_roles_created_by check (created_by ~ '^[^[:space:][:cntrl:]]([^[:cntrl:]]{0,126}[^[:space:][:cntrl:]])?$'),
+  constraint ck_roles_modified_by check (modified_by ~ '^[^[:space:][:cntrl:]]([^[:cntrl:]]{0,126}[^[:space:][:cntrl:]])?$')
 );
 
 comment on table  reg.roles           is 'The roles: a name and a set of operations, in one scope. One row per role.';
 comment on column reg.roles.scope     is 'compartment: held by a member in a compartment; platform: held by an operator of the platform.';
 comment on column reg.roles.declared  is 'Whether the application declares the role in code: re-applied by the installation, never deleted.';
+comment on column reg.roles.created_by  is 'The actor who created the role: the installation for a declared role, an operator otherwise.';
+comment on column reg.roles.modified_by is 'The actor of the last change; the creator, until a change.';
 
 create table reg.role_operations (
   role       varchar(63)  not null,
@@ -140,13 +168,17 @@ create index ix_role_operations_operation on reg.role_operations (operation);
 create table reg.memberships (
   subject      varchar(32)  not null,
   compartment  varchar(63)  not null,
+  granted_at   timestamptz  not null,
+  granted_by   varchar(128) not null,
 
   constraint pk_memberships primary key (subject, compartment),
+  constraint ck_memberships_granted_by check (granted_by ~ '^[^[:space:][:cntrl:]]([^[:cntrl:]]{0,126}[^[:space:][:cntrl:]])?$'),
   constraint fk_memberships_subject foreign key (subject) references reg.users (subject),
   constraint fk_memberships_compartment foreign key (compartment) references reg.compartments (compartment)
 );
 
 comment on table reg.memberships is 'The compartments each person is a member of. One row per (subject, compartment).';
+comment on column reg.memberships.granted_by is 'The actor who admitted the person in the compartment.';
 
 create index ix_memberships_compartment on reg.memberships (compartment);
 
@@ -154,13 +186,17 @@ create table reg.member_roles (
   subject      varchar(32)  not null,
   compartment  varchar(63)  not null,
   role         varchar(63)  not null,
+  granted_at   timestamptz  not null,
+  granted_by   varchar(128) not null,
 
   constraint pk_member_roles primary key (subject, compartment, role),
+  constraint ck_member_roles_granted_by check (granted_by ~ '^[^[:space:][:cntrl:]]([^[:cntrl:]]{0,126}[^[:space:][:cntrl:]])?$'),
   constraint fk_member_roles_membership foreign key (subject, compartment) references reg.memberships (subject, compartment) on delete cascade,
   constraint fk_member_roles_role foreign key (role) references reg.roles (role)
 );
 
 comment on table reg.member_roles is 'The compartment roles of each member. One row per (subject, compartment, role); gone with the membership.';
+comment on column reg.member_roles.granted_by is 'The actor who assigned the role.';
 
 -- A role changed recomputes every holder: the holders of a role are read by role.
 create index ix_member_roles_role on reg.member_roles (role);
@@ -170,14 +206,18 @@ create index ix_member_roles_role on reg.member_roles (role);
 -- admitted in the shared space; the platform roles say what she may do there.
 
 create table reg.operator_roles (
-  subject  varchar(32)  not null,
-  role     varchar(63)  not null,
+  subject     varchar(32)  not null,
+  role        varchar(63)  not null,
+  granted_at  timestamptz  not null,
+  granted_by  varchar(128) not null,
 
   constraint pk_operator_roles primary key (subject, role),
+  constraint ck_operator_roles_granted_by check (granted_by ~ '^[^[:space:][:cntrl:]]([^[:cntrl:]]{0,126}[^[:space:][:cntrl:]])?$'),
   constraint fk_operator_roles_subject foreign key (subject) references reg.users (subject),
   constraint fk_operator_roles_role foreign key (role) references reg.roles (role)
 );
 
 comment on table reg.operator_roles is 'The platform roles of each operator. One row per (subject, role).';
+comment on column reg.operator_roles.granted_by is 'The actor who assigned the role.';
 
 create index ix_operator_roles_role on reg.operator_roles (role);

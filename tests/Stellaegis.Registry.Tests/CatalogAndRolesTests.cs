@@ -41,13 +41,13 @@ public sealed class CatalogAndRolesTests
     {
         using var host = new TestHost();
         await host.Catalog.RecordAsync([Inventory, Billing, RegistryModule.Declaration], Ct);
-        Assert.True((await host.Roles.DeclareAsync(DeclaredRoles, Ct)).IsSuccess);
-        var custom = await host.Roles.CreateAsync("auditor", RoleScope.Compartment, "Auditor", [ItemsRead.Identity], Ct);
+        Assert.True((await host.Roles.DeclareAsync(DeclaredRoles, By, Ct)).IsSuccess);
+        var custom = await host.Roles.CreateAsync("auditor", RoleScope.Compartment, "Auditor", [ItemsRead.Identity], By, Ct);
         Assert.True(custom.IsSuccess);
 
         // Someone edits the declared role by hand; the installation puts it back, and leaves the custom one alone.
-        Assert.True((await host.Roles.UpdateAsync("reader", "Reader (edited)", [ItemsRead.Identity], Ct)).IsSuccess);
-        Assert.True((await host.Roles.DeclareAsync(DeclaredRoles, Ct)).IsSuccess);
+        Assert.True((await host.Roles.UpdateAsync("reader", "Reader (edited)", [ItemsRead.Identity], By, Ct)).IsSuccess);
+        Assert.True((await host.Roles.DeclareAsync(DeclaredRoles, By, Ct)).IsSuccess);
 
         var reader = (await host.Roles.GetAsync("reader", Ct)).Value;
         Assert.True(reader.Declared);
@@ -65,9 +65,9 @@ public sealed class CatalogAndRolesTests
     {
         using var host = new TestHost();
         await host.Catalog.RecordAsync([Inventory], Ct);
-        Assert.True((await host.Roles.CreateAsync("reader", RoleScope.Compartment, "Reader", [ItemsRead.Identity], Ct)).IsSuccess);
+        Assert.True((await host.Roles.CreateAsync("reader", RoleScope.Compartment, "Reader", [ItemsRead.Identity], By, Ct)).IsSuccess);
 
-        var declared = await host.Roles.DeclareAsync([new RoleDeclaration("reader", RoleScope.Compartment, "Reader", [ItemsRead])], Ct);
+        var declared = await host.Roles.DeclareAsync([new RoleDeclaration("reader", RoleScope.Compartment, "Reader", [ItemsRead])], By, Ct);
 
         Assert.Equal(RegistryErrors.RoleNotDeclaredCode, declared.Error!.Code);
     }
@@ -78,27 +78,27 @@ public sealed class CatalogAndRolesTests
         using var host = new TestHost();
         await host.Catalog.RecordAsync([Inventory], Ct);
 
-        var created = await host.Roles.CreateAsync("accountant", RoleScope.Compartment, "Accountant", [InvoicesIssue.Identity], Ct);
-        var declared = await host.Roles.DeclareAsync([Accountant], Ct);
+        var created = await host.Roles.CreateAsync("accountant", RoleScope.Compartment, "Accountant", [InvoicesIssue.Identity], By, Ct);
+        var declared = await host.Roles.DeclareAsync([Accountant], By, Ct);
 
         Assert.Equal(RegistryErrors.UnknownOperationCode, created.Error!.Code);
         Assert.Equal(RegistryErrors.UnknownOperationCode, declared.Error!.Code);
-        Assert.Equal(RegistryErrors.RoleNameInvalidCode, (await host.Roles.CreateAsync("Chef-Atelier", RoleScope.Compartment, "x", [], Ct)).Error!.Code);
+        Assert.Equal(RegistryErrors.RoleNameInvalidCode, (await host.Roles.CreateAsync("Chef-Atelier", RoleScope.Compartment, "x", [], By, Ct)).Error!.Code);
     }
 
     [Fact]
     public async Task A_declared_role_and_a_held_role_are_not_deleted()
     {
         using var host = await new TestHost().InstalledAsync(Ct);
-        Assert.True((await host.Roles.CreateAsync("auditor", RoleScope.Compartment, "Auditor", [ItemsRead.Identity], Ct)).IsSuccess);
-        await host.Memberships.AddAsync(Jane, Acme, Ct);
-        Assert.True((await host.Memberships.AssignRoleAsync(Jane, Acme, "auditor", Ct)).IsSuccess);
+        Assert.True((await host.Roles.CreateAsync("auditor", RoleScope.Compartment, "Auditor", [ItemsRead.Identity], By, Ct)).IsSuccess);
+        await host.Memberships.AddAsync(Jane, Acme, By, Ct);
+        Assert.True((await host.Memberships.AssignRoleAsync(Jane, Acme, "auditor", By, Ct)).IsSuccess);
 
-        Assert.Equal(RegistryErrors.RoleDeclaredCode, (await host.Roles.DeleteAsync("reader", Ct)).Error!.Code);
-        Assert.Equal(RegistryErrors.RoleInUseCode, (await host.Roles.DeleteAsync("auditor", Ct)).Error!.Code);
+        Assert.Equal(RegistryErrors.RoleDeclaredCode, (await host.Roles.DeleteAsync("reader", By, Ct)).Error!.Code);
+        Assert.Equal(RegistryErrors.RoleInUseCode, (await host.Roles.DeleteAsync("auditor", By, Ct)).Error!.Code);
 
-        Assert.True((await host.Memberships.UnassignRoleAsync(Jane, Acme, "auditor", Ct)).IsSuccess);
-        Assert.True((await host.Roles.DeleteAsync("auditor", Ct)).IsSuccess);
+        Assert.True((await host.Memberships.UnassignRoleAsync(Jane, Acme, "auditor", By, Ct)).IsSuccess);
+        Assert.True((await host.Roles.DeleteAsync("auditor", By, Ct)).IsSuccess);
         Assert.Equal(RegistryErrors.RoleNotFoundCode, (await host.Roles.GetAsync("auditor", Ct)).Error!.Code);
         Assert.Contains(host.Events.Events, e => e is RoleChangedEvent { Role: "auditor", Exists: false });
     }

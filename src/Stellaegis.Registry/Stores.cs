@@ -69,14 +69,14 @@ public interface IMembershipStore
     /// <summary>The members, in every compartment, that hold the role.</summary>
     Task<IReadOnlyList<Membership>> ListByRoleAsync(string role, CancellationToken cancellationToken = default);
 
-    /// <summary>Adds the membership; nothing when present.</summary>
-    Task AddAsync(string subject, Compartment compartment, CancellationToken cancellationToken = default);
+    /// <summary>Adds the membership with who granted it and when; nothing when present.</summary>
+    Task AddAsync(string subject, Compartment compartment, Stamp granted, CancellationToken cancellationToken = default);
 
     /// <summary>Removes the membership and its roles; nothing when absent.</summary>
     Task RemoveAsync(string subject, Compartment compartment, CancellationToken cancellationToken = default);
 
-    /// <summary>Assigns the role to the member; nothing when assigned.</summary>
-    Task AssignRoleAsync(string subject, Compartment compartment, string role, CancellationToken cancellationToken = default);
+    /// <summary>Assigns the role to the member with who granted it and when; nothing when assigned.</summary>
+    Task AssignRoleAsync(string subject, Compartment compartment, string role, Stamp granted, CancellationToken cancellationToken = default);
 
     /// <summary>Unassigns the role; nothing when absent.</summary>
     Task UnassignRoleAsync(string subject, Compartment compartment, string role, CancellationToken cancellationToken = default);
@@ -97,8 +97,8 @@ public interface IOperatorStore
     /// <summary>The operators that hold the role.</summary>
     Task<IReadOnlyList<string>> ListByRoleAsync(string role, CancellationToken cancellationToken = default);
 
-    /// <summary>Assigns the role; nothing when assigned.</summary>
-    Task AssignAsync(string subject, string role, CancellationToken cancellationToken = default);
+    /// <summary>Assigns the role with who granted it and when; nothing when assigned.</summary>
+    Task AssignAsync(string subject, string role, Stamp granted, CancellationToken cancellationToken = default);
 
     /// <summary>Unassigns the role; nothing when absent.</summary>
     Task UnassignAsync(string subject, string role, CancellationToken cancellationToken = default);

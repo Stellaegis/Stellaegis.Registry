@@ -62,10 +62,10 @@ internal sealed class TestHost : IDisposable
     public async Task<TestHost> InstalledAsync(CancellationToken ct)
     {
         await Catalog.RecordAsync([Fixtures.Inventory, Fixtures.Billing, RegistryModule.Declaration], ct);
-        Assert.True((await Roles.DeclareAsync(Fixtures.DeclaredRoles, ct)).IsSuccess);
-        Assert.True((await Compartments.CreateAsync(Fixtures.Acme, "Acme SA", ct)).IsSuccess);
-        Assert.True((await Users.RecordAsync(Fixtures.Jane, "jane@acme.test", "Jane Admin", ct)).IsSuccess);
-        Assert.True((await Users.RecordAsync(Fixtures.John, "john@acme.test", "John Doe", ct)).IsSuccess);
+        Assert.True((await Roles.DeclareAsync(Fixtures.DeclaredRoles, Fixtures.By, ct)).IsSuccess);
+        Assert.True((await Compartments.CreateAsync(Fixtures.Acme, "Acme SA", Fixtures.By, ct)).IsSuccess);
+        Assert.True((await Users.RecordAsync(Fixtures.Jane, "jane@acme.test", "Jane Admin", Fixtures.By, ct)).IsSuccess);
+        Assert.True((await Users.RecordAsync(Fixtures.John, "john@acme.test", "John Doe", Fixtures.By, ct)).IsSuccess);
         Sink.Clear();
         Events.Events.Clear();
         return this;
@@ -110,6 +110,9 @@ internal static class Fixtures
     public static readonly RoleDeclaration Accountant = new("accountant", RoleScope.Compartment, "Accountant", [InvoicesRead, InvoicesIssue]);
     public static readonly RoleDeclaration SuperAdmin = new("super_admin", RoleScope.Platform, "Platform administrator", [ItemsPurge, RegistryOperations.CompartmentsWrite]);
     public static readonly IReadOnlyList<RoleDeclaration> DeclaredRoles = [Reader, Accountant, SuperAdmin];
+
+    /// <summary>The actor of the writes of the tests: the installation of a test, as an installation names itself.</summary>
+    public static readonly Actor By = Actor.Job("tests");
 
     public static readonly Compartment Acme = Compartment.Parse("acme");
     public static readonly Compartment Globex = Compartment.Parse("globex");

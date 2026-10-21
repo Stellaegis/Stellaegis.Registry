@@ -15,12 +15,32 @@ public enum CompartmentStatus
     Terminated,
 }
 
+/// <summary>
+/// Who wrote a row, and when: the trace every write of the registry carries. The actor is never defaulted — a
+/// write without one is an error, not "system".
+/// </summary>
+/// <param name="At">When.</param>
+/// <param name="By">Who: the person on the routes, <c>job:install</c> for the installation, the person themselves when they registered.</param>
+public sealed record Stamp(DateTimeOffset At, Actor By);
+
+/// <summary>The trace of a row that is created once and changed after: its creation, and its last change.</summary>
+/// <param name="Created">When and by whom the row was created.</param>
+/// <param name="Modified">When and by whom it was last changed; the creation, until a change.</param>
+public sealed record Audit(Stamp Created, Stamp Modified)
+{
+    /// <summary>The audit of a row just created.</summary>
+    public static Audit CreatedBy(Actor by, DateTimeOffset at) => new(new Stamp(at, by), new Stamp(at, by));
+
+    /// <summary>The audit after a change.</summary>
+    public Audit ModifiedBy(Actor by, DateTimeOffset at) => this with { Modified = new Stamp(at, by) };
+}
+
 /// <summary>A compartment of the application, as the registry knows it.</summary>
 /// <param name="Compartment">Its name, the one the frame and the routes use.</param>
 /// <param name="DisplayName">What people call it.</param>
 /// <param name="Status">Its state.</param>
-/// <param name="CreatedAt">When it was created.</param>
-public sealed record CompartmentRecord(Compartment Compartment, string DisplayName, CompartmentStatus Status, DateTimeOffset CreatedAt);
+/// <param name="Audit">Who created it and who last changed it, and when.</param>
+public sealed record CompartmentRecord(Compartment Compartment, string DisplayName, CompartmentStatus Status, Audit Audit);
 
 /// <summary>The state of a user in the registry.</summary>
 public enum UserStatus
@@ -40,8 +60,8 @@ public enum UserStatus
 /// <param name="Email">Their e-mail, as Identity gave it.</param>
 /// <param name="DisplayName">What people call them.</param>
 /// <param name="Status">Their state.</param>
-/// <param name="CreatedAt">When they were recorded.</param>
-public sealed record UserRecord(string Subject, string Email, string DisplayName, UserStatus Status, DateTimeOffset CreatedAt);
+/// <param name="Audit">Who recorded them — the person themselves, when they registered — and who last changed them, and when.</param>
+public sealed record UserRecord(string Subject, string Email, string DisplayName, UserStatus Status, Audit Audit);
 
 /// <summary>
 /// An operation of the catalogue: what can be granted, as a module declared it. The catalogue is written by the
@@ -68,7 +88,8 @@ public enum RoleScope
 /// <param name="DisplayName">What people call it.</param>
 /// <param name="Declared">Whether the application declares it in code: the installation re-applies it, and it cannot be deleted.</param>
 /// <param name="Operations">The identities of its operations, each in the catalogue.</param>
-public sealed record Role(string Name, RoleScope Scope, string DisplayName, bool Declared, IReadOnlyCollection<string> Operations);
+/// <param name="Audit">Who created it — the installation, for a declared role — and who last changed it, and when.</param>
+public sealed record Role(string Name, RoleScope Scope, string DisplayName, bool Declared, IReadOnlyCollection<string> Operations, Audit Audit);
 
 /// <summary>
 /// A role the application declares in code, which the installation records and re-applies: created when missing,
@@ -91,7 +112,8 @@ public sealed record RoleDeclaration(string Name, RoleScope Scope, string Displa
 /// <param name="Subject">The member.</param>
 /// <param name="Compartment">The compartment.</param>
 /// <param name="Roles">The names of their compartment roles there.</param>
-public sealed record Membership(string Subject, Compartment Compartment, IReadOnlyCollection<string> Roles);
+/// <param name="Granted">Who admitted them in the compartment, and when. Each role carries its own trace in the store.</param>
+public sealed record Membership(string Subject, Compartment Compartment, IReadOnlyCollection<string> Roles, Stamp Granted);
 
 /// <summary>The rules the registry holds its names to.</summary>
 public static class RegistryRules

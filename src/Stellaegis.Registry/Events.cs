@@ -13,6 +13,9 @@ public sealed record CompartmentChangedEvent : IEvent
 
     /// <summary>Its state after the change.</summary>
     public required CompartmentStatus Status { get; init; }
+
+    /// <summary>Who made the change.</summary>
+    public required Actor By { get; init; }
 }
 
 /// <summary>Published when a user was recorded, deactivated or reactivated.</summary>
@@ -26,6 +29,9 @@ public sealed record UserChangedEvent : IEvent
 
     /// <summary>Their state after the change.</summary>
     public required UserStatus Status { get; init; }
+
+    /// <summary>Who made the change.</summary>
+    public required Actor By { get; init; }
 }
 
 /// <summary>Published when a role was created, changed or deleted.</summary>
@@ -39,6 +45,9 @@ public sealed record RoleChangedEvent : IEvent
 
     /// <summary>Whether the role still exists.</summary>
     public required bool Exists { get; init; }
+
+    /// <summary>Who made the change.</summary>
+    public required Actor By { get; init; }
 }
 
 /// <summary>Published when a user joined or left a compartment, or when their roles there changed.</summary>
@@ -55,6 +64,9 @@ public sealed record MembershipChangedEvent : IEvent
 
     /// <summary>Whether the user is a member after the change.</summary>
     public required bool IsMember { get; init; }
+
+    /// <summary>Who made the change.</summary>
+    public required Actor By { get; init; }
 }
 
 /// <summary>
