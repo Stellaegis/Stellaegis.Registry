@@ -1,0 +1,202 @@
+using static Stellaegis.Registry.Tests.Fixtures;
+
+namespace Stellaegis.Registry.Tests;
+
+/// <summary>Every change that touches rights hands a snapshot to the sink, synchronously, in the same operation.</summary>
+public sealed class ProjectionTests
+{
+    private static CancellationToken Ct => TestContext.Current.CancellationToken;
+
+    [Fact]
+    public async Task A_membership_added_projects_the_memberships_of_the_person()
+    {
+        using var host = await new TestHost().InstalledAsync(Ct);
+
+        Assert.True((await host.Memberships.AddAsync(Jane, Acme, Ct)).IsSuccess);
+
+        var call = Assert.Single(host.Sink.Calls);
+        Assert.Equal(new RightsSinkCall(RightsSinkCallKind.ReplaceMemberships, Jane, null, ["acme"]), call);
+        Assert.Contains(host.Events.Events, e => e is MembershipChangedEvent { Subject: var s, IsMember: true } && s == Jane);
+    }
+
+    [Fact]
+    public async Task A_role_assigned_projects_the_union_of_the_roles_in_the_compartment()
+    {
+        using var host = await new TestHost().InstalledAsync(Ct);
+        await host.Memberships.AddAsync(Jane, Acme, Ct);
+        host.Sink.Clear();
+
+        Assert.True((await host.Memberships.AssignRoleAsync(Jane, Acme, "reader", Ct)).IsSuccess);
+        Assert.Equal(["invoices.read", "items.read"], host.Sink.Last(RightsSinkCallKind.ReplaceUserGrants)!.Values);
+
+        Assert.True((await host.Memberships.AssignRoleAsync(Jane, Acme, "accountant", Ct)).IsSuccess);
+        var last = host.Sink.Last(RightsSinkCallKind.ReplaceUserGrants)!;
+        Assert.Equal(Acme, last.Compartment);
+        Assert.Equal(["invoices.issue", "invoices.read", "items.read"], last.Values);
+        Assert.Contains(host.Events.Events, e => e is RightsChangedEvent { Subject: var s, Compartment: var c } && s == Jane && c == Acme);
+
+        Assert.True((await host.Memberships.UnassignRoleAsync(Jane, Acme, "reader", Ct)).IsSuccess);
+        Assert.Equal(["invoices.issue", "invoices.read"], host.Sink.Last(RightsSinkCallKind.ReplaceUserGrants)!.Values);
+    }
+
+    [Fact]
+    public async Task A_role_needs_a_member_and_the_right_scope()
+    {
+        using var host = await new TestHost().InstalledAsync(Ct);
+
+        Assert.Equal(RegistryErrors.NotMemberCode, (await host.Memberships.AssignRoleAsync(Jane, Acme, "reader", Ct)).Error!.Code);
+        await host.Memberships.AddAsync(Jane, Acme, Ct);
+        Assert.Equal(RegistryErrors.RoleScopeMismatchCode, (await host.Memberships.AssignRoleAsync(Jane, Acme, "super_admin", Ct)).Error!.Code);
+        Assert.Equal(RegistryErrors.RoleScopeMismatchCode, (await host.Operators.AssignAsync(Jane, "reader", Ct)).Error!.Code);
+        Assert.Equal(RegistryErrors.RoleNotFoundCode, (await host.Operators.AssignAsync(Jane, "nobody", Ct)).Error!.Code);
+        Assert.Equal(RegistryErrors.CompartmentNotFoundCode, (await host.Memberships.AddAsync(Jane, Globex, Ct)).Error!.Code);
+        Assert.Equal(RegistryErrors.UserNotFoundCode, (await host.Memberships.AddAsync(Guid.NewGuid().ToString("N"), Acme, Ct)).Error!.Code);
+    }
+
+    [Fact]
+    public async Task A_platform_role_projects_the_admin_grants()
+    {
+        using var host = await new TestHost().InstalledAsync(Ct);
+
+        Assert.True((await host.Operators.AssignAsync(Jane, "super_admin", Ct)).IsSuccess);
+
+        var call = Assert.Single(host.Sink.Calls);
+        Assert.Equal(new RightsSinkCall(RightsSinkCallKind.ReplaceAdminGrants, Jane, null, ["compartments.write", "items.purge"]), call);
+        Assert.Equal(["super_admin"], await host.Operators.ListRolesAsync(Jane, Ct));
+
+        Assert.True((await host.Operators.UnassignAsync(Jane, "super_admin", Ct)).IsSuccess);
+        Assert.Empty(host.Sink.Last(RightsSinkCallKind.ReplaceAdminGrants)!.Values);
+        Assert.Empty(await host.Operators.ListAsync(Ct));
+    }
+
+    [Fact]
+    public async Task A_role_changed_recomputes_every_holder()
+    {
+        using var host = await new TestHost().InstalledAsync(Ct);
+        Assert.True((await host.Compartments.CreateAsync(Globex, "Globex", Ct)).IsSuccess);
+        await host.Memberships.AddAsync(Jane, Acme, Ct);
+        await host.Memberships.AddAsync(John, Globex, Ct);
+        await host.Memberships.AssignRoleAsync(Jane, Acme, "reader", Ct);
+        await host.Memberships.AssignRoleAsync(John, Globex, "reader", Ct);
+        await host.Memberships.AssignRoleAsync(John, Globex, "accountant", Ct);
+        host.Sink.Clear();
+
+        Assert.True((await host.Roles.UpdateAsync("reader", "Reader", [ItemsRead.Identity], Ct)).IsSuccess);
+
+        var calls = host.Sink.Calls.Where(c => c.Kind == RightsSinkCallKind.ReplaceUserGrants).ToList();
+        Assert.Equal(2, calls.Count);
+        Assert.Equal(["items.read"], calls.Single(c => c.Subject == Jane).Values);
+        Assert.Equal(["invoices.issue", "invoices.read", "items.read"], calls.Single(c => c.Subject == John).Values);
+
+        // Re-declaring the role as it was declared puts invoices.read back, for both.
+        host.Sink.Clear();
+        Assert.True((await host.Roles.DeclareAsync([Reader], Ct)).IsSuccess);
+        Assert.Equal(["invoices.read", "items.read"], host.Sink.Calls.Single(c => c.Subject == Jane).Values);
+
+        // Declaring it again, unchanged, projects nothing.
+        host.Sink.Clear();
+        Assert.True((await host.Roles.DeclareAsync([Reader], Ct)).IsSuccess);
+        Assert.Empty(host.Sink.Calls);
+    }
+
+    [Fact]
+    public async Task A_platform_role_changed_recomputes_its_operators()
+    {
+        using var host = await new TestHost().InstalledAsync(Ct);
+        await host.Operators.AssignAsync(Jane, "super_admin", Ct);
+        host.Sink.Clear();
+
+        Assert.True((await host.Roles.UpdateAsync("super_admin", "Platform administrator", [ItemsPurge.Identity], Ct)).IsSuccess);
+
+        Assert.Equal(new RightsSinkCall(RightsSinkCallKind.ReplaceAdminGrants, Jane, null, ["items.purge"]), Assert.Single(host.Sink.Calls));
+    }
+
+    [Fact]
+    public async Task A_user_deactivated_loses_everything_and_a_reactivated_one_gets_it_back()
+    {
+        using var host = await new TestHost().InstalledAsync(Ct);
+        await host.Memberships.AddAsync(Jane, Acme, Ct);
+        await host.Memberships.AssignRoleAsync(Jane, Acme, "reader", Ct);
+        await host.Operators.AssignAsync(Jane, "super_admin", Ct);
+        host.Sink.Clear();
+
+        Assert.True((await host.Users.DeactivateAsync(Jane, Ct)).IsSuccess);
+        Assert.Equal(new RightsSinkCall(RightsSinkCallKind.RemoveSubject, Jane, null, []), Assert.Single(host.Sink.Calls));
+        Assert.Equal(RegistryErrors.UserDeactivatedCode, (await host.Memberships.AssignRoleAsync(Jane, Acme, "accountant", Ct)).Error!.Code);
+        Assert.Single(await host.Memberships.ListByUserAsync(Jane, Ct));   // kept in the registry
+
+        host.Sink.Clear();
+        Assert.True((await host.Users.ReactivateAsync(Jane, Ct)).IsSuccess);
+        Assert.Equal(["acme"], host.Sink.Last(RightsSinkCallKind.ReplaceMemberships)!.Values);
+        Assert.Equal(["invoices.read", "items.read"], host.Sink.Last(RightsSinkCallKind.ReplaceUserGrants)!.Values);
+        Assert.Equal(["compartments.write", "items.purge"], host.Sink.Last(RightsSinkCallKind.ReplaceAdminGrants)!.Values);
+        Assert.Contains(host.Events.Events, e => e is UserChangedEvent { Status: UserStatus.Active, Subject: var s } && s == Jane);
+    }
+
+    [Fact]
+    public async Task A_compartment_terminated_is_removed_from_the_sink_and_from_the_registry()
+    {
+        using var host = await new TestHost().InstalledAsync(Ct);
+        await host.Memberships.AddAsync(Jane, Acme, Ct);
+        await host.Memberships.AssignRoleAsync(Jane, Acme, "reader", Ct);
+        host.Sink.Clear();
+
+        Assert.True((await host.Compartments.TerminateAsync(Acme, Ct)).IsSuccess);
+
+        Assert.Equal(new RightsSinkCall(RightsSinkCallKind.RemoveCompartment, null, Acme, []), Assert.Single(host.Sink.Calls));
+        Assert.Empty(await host.Memberships.ListByCompartmentAsync(Acme, Ct));
+        Assert.Equal(CompartmentStatus.Terminated, (await host.Compartments.GetAsync(Acme, Ct)).Value.Status);
+        Assert.Equal(RegistryErrors.CompartmentTerminatedCode, (await host.Memberships.AddAsync(Jane, Acme, Ct)).Error!.Code);
+        Assert.Equal(RegistryErrors.CompartmentExistsCode, (await host.Compartments.CreateAsync(Acme, "Acme again", Ct)).Error!.Code);
+        Assert.Contains(host.Events.Events, e => e is CompartmentChangedEvent { Status: CompartmentStatus.Terminated });
+    }
+
+    [Fact]
+    public async Task A_compartment_suspended_holds_no_right_until_it_resumes()
+    {
+        using var host = await new TestHost().InstalledAsync(Ct);
+        await host.Memberships.AddAsync(Jane, Acme, Ct);
+        await host.Memberships.AssignRoleAsync(Jane, Acme, "reader", Ct);
+        host.Sink.Clear();
+
+        Assert.True((await host.Compartments.SuspendAsync(Acme, Ct)).IsSuccess);
+        Assert.Equal(RightsSinkCallKind.RemoveCompartment, Assert.Single(host.Sink.Calls).Kind);
+        Assert.Single(await host.Memberships.ListByCompartmentAsync(Acme, Ct));   // kept in the registry
+
+        // A role assigned while suspended is recorded, and projects nothing but an empty snapshot.
+        host.Sink.Clear();
+        Assert.True((await host.Memberships.AssignRoleAsync(Jane, Acme, "accountant", Ct)).IsSuccess);
+        Assert.Empty(host.Sink.Last(RightsSinkCallKind.ReplaceUserGrants)!.Values);
+
+        host.Sink.Clear();
+        Assert.True((await host.Compartments.ResumeAsync(Acme, Ct)).IsSuccess);
+        Assert.Equal(["acme"], host.Sink.Last(RightsSinkCallKind.ReplaceMemberships)!.Values);
+        Assert.Equal(["invoices.issue", "invoices.read", "items.read"], host.Sink.Last(RightsSinkCallKind.ReplaceUserGrants)!.Values);
+    }
+
+    [Fact]
+    public async Task A_membership_removed_projects_empty_rights_in_the_compartment()
+    {
+        using var host = await new TestHost().InstalledAsync(Ct);
+        await host.Memberships.AddAsync(Jane, Acme, Ct);
+        await host.Memberships.AssignRoleAsync(Jane, Acme, "reader", Ct);
+        host.Sink.Clear();
+
+        Assert.True((await host.Memberships.RemoveAsync(Jane, Acme, Ct)).IsSuccess);
+
+        Assert.Empty(host.Sink.Last(RightsSinkCallKind.ReplaceMemberships)!.Values);
+        Assert.Empty(host.Sink.Last(RightsSinkCallKind.ReplaceUserGrants)!.Values);
+        Assert.Contains(host.Events.Events, e => e is MembershipChangedEvent { IsMember: false });
+    }
+
+    [Fact]
+    public async Task Without_a_sink_the_registry_still_works_and_warns_once()
+    {
+        using var host = await new TestHost(withSink: false).InstalledAsync(Ct);
+
+        Assert.True((await host.Memberships.AddAsync(Jane, Acme, Ct)).IsSuccess);
+        Assert.True((await host.Memberships.AssignRoleAsync(Jane, Acme, "reader", Ct)).IsSuccess);
+
+        Assert.Equal(["reader"], Assert.Single(await host.Memberships.ListByUserAsync(Jane, Ct)).Roles);
+    }
+}
