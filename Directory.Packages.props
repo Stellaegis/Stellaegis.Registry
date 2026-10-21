@@ -9,9 +9,18 @@
     <PackageVersion Include="Stellaegis.Primitives.Data" Version="5.1.0" />
     <PackageVersion Include="Stellaegis.Primitives.AspNetCore" Version="5.1.0" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.13" />
-    <!-- The cache of decisions of a resource server apart -->
-    <!-- The demonstration tokens of the example host, samples/ only -->
-    <PackageVersion Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.13" />
+    <!-- The rest of the base, for the example host under samples/ only: the registry references none of them -->
+    <PackageVersion Include="Stellaegis.Identity" Version="5.1.0" />
+    <PackageVersion Include="Stellaegis.Identity.PostgreSQL" Version="5.1.0" />
+    <PackageVersion Include="Stellaegis.Identity.AspNetCore" Version="5.1.0" />
+    <PackageVersion Include="Stellaegis.Identity.Server" Version="5.1.0" />
+    <PackageVersion Include="Stellaegis.Issuer" Version="5.0.0" />
+    <PackageVersion Include="Stellaegis.Issuer.PostgreSQL" Version="5.0.0" />
+    <PackageVersion Include="Stellaegis.Issuer.Client" Version="5.0.0" />
+    <PackageVersion Include="Stellaegis.Issuer.Server" Version="5.0.0" />
+    <PackageVersion Include="Stellaegis.Access" Version="5.0.0" />
+    <PackageVersion Include="Stellaegis.Access.PostgreSQL" Version="5.0.0" />
+    <PackageVersion Include="Stellaegis.Access.AspNetCore" Version="5.0.0" />
     <!-- PostgreSQL -->
     <PackageVersion Include="Dapper" Version="2.1.89" />
     <PackageVersion Include="Npgsql" Version="10.0.3" />

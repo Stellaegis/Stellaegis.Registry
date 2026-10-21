@@ -25,8 +25,8 @@ namespace Stellaegis.Registry.AspNetCore;
 /// <list type="bullet">
 ///   <item><c>GET registry/compartments</c>, <c>GET registry/compartments/{compartment}</c> — <c>compartments.read</c></item>
 ///   <item><c>POST registry/compartments</c> (201), <c>PUT registry/compartments/{compartment}</c> (the display name), <c>POST …/suspend</c>, <c>…/resume</c>, <c>…/terminate</c> — <c>compartments.write</c></item>
-///   <item><c>GET registry/users</c>, <c>GET registry/users/{subject}</c> — <c>users.read</c>; no creation: a user is the projection of an account of Identity, recorded by the host from <c>UserRegistered</c></item>
-///   <item><c>POST registry/users/{subject}/deactivate</c>, <c>…/reactivate</c> — <c>users.write</c></item>
+///   <item><c>GET registry/users</c>, <c>GET registry/users/{subject}</c> — <c>directory.read</c>; no creation: a user is the projection of an account of Identity, recorded by the host from <c>UserRegistered</c></item>
+///   <item><c>POST registry/users/{subject}/deactivate</c>, <c>…/reactivate</c> — <c>directory.write</c></item>
 ///   <item><c>GET registry/catalog</c>, <c>GET registry/catalog/{module}</c> — <c>catalog.read</c></item>
 ///   <item><c>GET registry/roles?scope=</c>, <c>GET registry/roles/{role}</c> — <c>roles.read</c></item>
 ///   <item><c>POST registry/roles</c> (201), <c>PUT registry/roles/{role}</c>, <c>DELETE registry/roles/{role}</c> — <c>roles.write</c>; a declared role is changed, never deleted</item>
@@ -154,14 +154,14 @@ public static class RegistryAdminEndpoints
     {
         users.MapGet("/", async (IUserDirectory directory, CancellationToken ct) =>
                 Results.Ok((await directory.ListAsync(ct)).Select(UserSummary.Of).ToArray()))
-            .WithMetadata(RegistryOperations.UsersRead)
+            .WithMetadata(RegistryOperations.DirectoryRead)
             .Produces<UserSummary[]>(StatusCodes.Status200OK);
 
         users.MapGet("/{subject}", async (string subject, IUserDirectory directory, CancellationToken ct) =>
                 RegistryRules.IsSubject(subject)
                     ? Summary(await directory.GetAsync(subject, ct), UserSummary.Of)
                     : NotASubject(subject))
-            .WithMetadata(RegistryOperations.UsersRead)
+            .WithMetadata(RegistryOperations.DirectoryRead)
             .Produces<UserSummary>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status404NotFound);
 
@@ -172,7 +172,7 @@ public static class RegistryAdminEndpoints
                 Written(http, loggers, "deactivated user {Subject}", subject);
                 return Summary(await directory.DeactivateAsync(subject, Callers.ActorOf(http), ct), UserSummary.Of);
             })
-            .WithMetadata(RegistryOperations.UsersWrite)
+            .WithMetadata(RegistryOperations.DirectoryWrite)
             .Produces<UserSummary>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status404NotFound);
 
@@ -183,7 +183,7 @@ public static class RegistryAdminEndpoints
                 Written(http, loggers, "reactivated user {Subject}", subject);
                 return Summary(await directory.ReactivateAsync(subject, Callers.ActorOf(http), ct), UserSummary.Of);
             })
-            .WithMetadata(RegistryOperations.UsersWrite)
+            .WithMetadata(RegistryOperations.DirectoryWrite)
             .Produces<UserSummary>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status404NotFound);
     }

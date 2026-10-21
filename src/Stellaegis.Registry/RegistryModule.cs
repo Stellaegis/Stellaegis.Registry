@@ -29,11 +29,15 @@ public static class RegistryOperations
     /// <summary>Creating, renaming, suspending or terminating a compartment, <c>compartments.write</c>.</summary>
     public static readonly Operation CompartmentsWrite = new("compartments", "write", OperationKind.Write);
 
-    /// <summary>Reading the users, <c>users.read</c>.</summary>
-    public static readonly Operation UsersRead = new("users", "read", OperationKind.Read);
+    /// <summary>
+    /// Reading the directory of users, <c>directory.read</c>. The target is the directory, not <c>users</c>: an
+    /// operation's identity is the key a rights system grants, across every module of a host, and
+    /// <c>Stellaegis.Identity</c> already declares <c>users.read</c> for its accounts.
+    /// </summary>
+    public static readonly Operation DirectoryRead = new("directory", "read", OperationKind.Read);
 
-    /// <summary>Deactivating or reactivating a user, <c>users.write</c>.</summary>
-    public static readonly Operation UsersWrite = new("users", "write", OperationKind.Write);
+    /// <summary>Deactivating or reactivating a user in the directory, <c>directory.write</c>.</summary>
+    public static readonly Operation DirectoryWrite = new("directory", "write", OperationKind.Write);
 
     /// <summary>Reading the catalogue of operations, <c>catalog.read</c>.</summary>
     public static readonly Operation CatalogRead = new("catalog", "read", OperationKind.Read);
@@ -59,7 +63,7 @@ public static class RegistryOperations
     /// <summary>Every operation of the module.</summary>
     public static IReadOnlyList<Operation> All { get; } =
     [
-        CompartmentsRead, CompartmentsWrite, UsersRead, UsersWrite, CatalogRead,
+        CompartmentsRead, CompartmentsWrite, DirectoryRead, DirectoryWrite, CatalogRead,
         RolesRead, RolesWrite, MembershipsRead, MembershipsWrite, OperatorsRead, OperatorsWrite,
     ];
 }

@@ -4,6 +4,9 @@
     <Project Path="src/Stellaegis.Registry.PostgreSQL/Stellaegis.Registry.PostgreSQL.csproj" />
     <Project Path="src/Stellaegis.Registry/Stellaegis.Registry.csproj" />
   </Folder>
+  <Folder Name="/samples/">
+    <Project Path="samples/Stellaegis.Registry.Sample/Stellaegis.Registry.Sample.csproj" />
+  </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Stellaegis.Registry.Tests/Stellaegis.Registry.Tests.csproj" />
   </Folder>

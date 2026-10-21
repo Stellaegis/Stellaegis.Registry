@@ -1,0 +1,13 @@
+{
+  "profiles": {
+    "Stellaegis.Registry.Sample": {
+      "commandName": "Project",
+      "launchBrowser": true,
+      "launchUrl": "login",
+      "applicationUrl": "https://localhost:7131",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development"
+      }
+    }
+  }
+}
