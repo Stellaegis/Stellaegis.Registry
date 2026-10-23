@@ -14,7 +14,7 @@ namespace Stellaegis.Registry.PostgreSQL;
 /// none is shared between two.
 /// </summary>
 internal sealed class PostgreSqlRegistryStore
-    : ICompartmentStore, IUserStore, ICatalogStore, IRoleStore, IMembershipStore, IOperatorStore, IAsyncDisposable, IDisposable
+    : ICompartmentStore, IUserStore, ICatalogStore, IRoleStore, IMembershipStore, IOperatorStore, IInvitationStore, IAsyncDisposable, IDisposable
 {
     private readonly NpgsqlDataSource _dataSource;
     private readonly AdoUnitOfWorkFactory<RegistryDatabase> _units;
@@ -33,7 +33,8 @@ internal sealed class PostgreSqlRegistryStore
             .Add<CatalogRepository>((connection, transaction) => new CatalogRepository(connection, transaction))
             .Add<RoleRepository>((connection, transaction) => new RoleRepository(connection, transaction))
             .Add<MembershipRepository>((connection, transaction) => new MembershipRepository(connection, transaction))
-            .Add<OperatorRepository>((connection, transaction) => new OperatorRepository(connection, transaction));
+            .Add<OperatorRepository>((connection, transaction) => new OperatorRepository(connection, transaction))
+            .Add<InvitationRepository>((connection, transaction) => new InvitationRepository(connection, transaction));
 
         _dataSource = NpgsqlDataSource.Create(value.ConnectionString);
         _units = new AdoUnitOfWorkFactory<RegistryDatabase>(_dataSource, registry);
@@ -133,6 +134,61 @@ internal sealed class PostgreSqlRegistryStore
     {
         await using var uow = await _units.OpenAsync(cancellationToken).ConfigureAwait(false);
         return await uow.Repo<UserRepository>().ListAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    async Task<UserRecord?> IUserStore.FindByEmailAsync(string email, CancellationToken cancellationToken)
+    {
+        Guard.NotWhiteSpace(email);
+        await using var uow = await _units.OpenAsync(cancellationToken).ConfigureAwait(false);
+        return await uow.Repo<UserRepository>().FindByEmailAsync(email, cancellationToken).ConfigureAwait(false);
+    }
+
+    // ── Invitations ──────────────────────────────────────────────────────────
+
+    async Task IInvitationStore.InsertAsync(Invitation invitation, CancellationToken cancellationToken)
+    {
+        Guard.NotNull(invitation);
+        // The invitation and its roles in one transaction: never one without the other.
+        await using var uow = await _units.OpenAndBeginAsync(cancellationToken).ConfigureAwait(false);
+        await uow.Repo<InvitationRepository>().InsertAsync(invitation, cancellationToken).ConfigureAwait(false);
+        await uow.CommitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    async Task<Invitation?> IInvitationStore.GetAsync(Guid invitationId, CancellationToken cancellationToken)
+    {
+        await using var uow = await _units.OpenAsync(cancellationToken).ConfigureAwait(false);
+        return (await uow.Repo<InvitationRepository>().ListAsync("i.invitation_id = @invitationId", new { invitationId }, cancellationToken).ConfigureAwait(false)).SingleOrDefault();
+    }
+
+    async Task<Invitation?> IInvitationStore.GetByHashAsync(string tokenHash, CancellationToken cancellationToken)
+    {
+        await using var uow = await _units.OpenAsync(cancellationToken).ConfigureAwait(false);
+        return (await uow.Repo<InvitationRepository>().ListAsync("i.token_hash = @tokenHash", new { tokenHash }, cancellationToken).ConfigureAwait(false)).SingleOrDefault();
+    }
+
+    async Task<IReadOnlyList<Invitation>> IInvitationStore.ListByCompartmentAsync(Compartment compartment, CancellationToken cancellationToken)
+    {
+        Guard.NotNull(compartment);
+        await using var uow = await _units.OpenAsync(cancellationToken).ConfigureAwait(false);
+        return await uow.Repo<InvitationRepository>().ListAsync("i.compartment = @compartment", new { compartment = compartment.Value }, cancellationToken).ConfigureAwait(false);
+    }
+
+    async Task<bool> IInvitationStore.RevokeAsync(Guid invitationId, Stamp revoked, CancellationToken cancellationToken)
+    {
+        await using var uow = await _units.OpenAsync(cancellationToken).ConfigureAwait(false);
+        return await uow.Repo<InvitationRepository>().RevokeAsync(invitationId, revoked, cancellationToken).ConfigureAwait(false);
+    }
+
+    async Task<bool> IInvitationStore.TryAcceptAsync(string tokenHash, string subject, DateTimeOffset at, CancellationToken cancellationToken)
+    {
+        await using var uow = await _units.OpenAsync(cancellationToken).ConfigureAwait(false);
+        return await uow.Repo<InvitationRepository>().TryAcceptAsync(tokenHash, subject, at, cancellationToken).ConfigureAwait(false);
+    }
+
+    async Task<int> IInvitationStore.DeleteDeadBeforeAsync(DateTimeOffset before, CancellationToken cancellationToken)
+    {
+        await using var uow = await _units.OpenAsync(cancellationToken).ConfigureAwait(false);
+        return await uow.Repo<InvitationRepository>().DeleteDeadBeforeAsync(before, cancellationToken).ConfigureAwait(false);
     }
 
     async Task IUserStore.SaveAsync(UserRecord user, CancellationToken cancellationToken)

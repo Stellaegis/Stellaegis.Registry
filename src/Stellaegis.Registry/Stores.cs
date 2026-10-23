@@ -46,6 +46,9 @@ public interface IUserStore
     /// <summary>Every user, by subject.</summary>
     Task<IReadOnlyList<UserRecord>> ListAsync(CancellationToken cancellationToken = default);
 
+    /// <summary>The user whose e-mail is <paramref name="email"/>, compared without case, or <see langword="null"/>.</summary>
+    Task<UserRecord?> FindByEmailAsync(string email, CancellationToken cancellationToken = default);
+
     /// <summary>Inserts the user, or replaces their e-mail, display name and status.</summary>
     Task SaveAsync(UserRecord user, CancellationToken cancellationToken = default);
 }

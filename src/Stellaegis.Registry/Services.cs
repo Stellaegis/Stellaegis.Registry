@@ -777,6 +777,51 @@ internal sealed class AssignmentRules(IRoleStore roles, IMembershipStore members
         if (roleNames.Count == 0)
             return null;
 
+        return Covers(await HeldAsync(actor, compartment, all, cancellationToken).ConfigureAwait(false), all, roleNames);
+    }
+
+    /// <summary>
+    /// The refusal when the actor may not assign every role of <paramref name="roleNames"/> in <paramref name="compartment"/>,
+    /// whoever to — what an invitation, an assignment deferred to someone not known yet, needs; <see langword="null"/> otherwise.
+    /// </summary>
+    public async Task<Error?> CoversAsync(Actor actor, Compartment compartment, IReadOnlyCollection<string> roleNames, CancellationToken cancellationToken)
+    {
+        if (roleNames.Contains(RegistryRoles.Owner, StringComparer.Ordinal))
+            return RegistryErrors.RoleReserved(RegistryRoles.Owner);
+        if (IsJob(actor) || roleNames.Count == 0)
+            return null;
+        var all = (await roles.ListAsync(cancellationToken: cancellationToken).ConfigureAwait(false)).ToDictionary(role => role.Name, StringComparer.Ordinal);
+        return Covers(await HeldAsync(actor, compartment, all, cancellationToken).ConfigureAwait(false), all, roleNames);
+    }
+
+    /// <summary>
+    /// Whether the actor may designate the owner of a compartment that has none: the installation, or an operator whose
+    /// platform roles cover every compartment role — the owner's list.
+    /// </summary>
+    public async Task<bool> DesignatesOwnersAsync(Actor actor, CancellationToken cancellationToken)
+    {
+        if (IsJob(actor))
+            return true;
+        if (!RegistryRules.IsSubject(actor.Value))
+            return false;
+        var all = (await roles.ListAsync(cancellationToken: cancellationToken).ConfigureAwait(false)).ToDictionary(role => role.Name, StringComparer.Ordinal);
+        return (await operators.ListRolesAsync(RegistryRules.NormalizeSubject(actor.Value), cancellationToken).ConfigureAwait(false))
+            .Any(name => all.TryGetValue(name, out var role) && role.Assignable.Compartment == CompartmentRoleSelector.All);
+    }
+
+    /// <summary>Whether the actor holds <paramref name="operation"/> by one of their roles, on the platform or in <paramref name="compartment"/>.</summary>
+    public async Task<bool> HoldsAsync(Actor actor, Compartment compartment, string operation, CancellationToken cancellationToken)
+    {
+        if (IsJob(actor))
+            return true;
+        var all = (await roles.ListAsync(cancellationToken: cancellationToken).ConfigureAwait(false)).ToDictionary(role => role.Name, StringComparer.Ordinal);
+        return (await HeldAsync(actor, compartment, all, cancellationToken).ConfigureAwait(false))
+            .Any(name => all.TryGetValue(name, out var role) && role.Operations.Contains(operation, StringComparer.Ordinal));
+    }
+
+    // The roles of a person on the platform and, when given, in the compartment; none for an actor who is not a person.
+    private async Task<IReadOnlyList<string>> HeldAsync(Actor actor, Compartment? compartment, IReadOnlyDictionary<string, Role> all, CancellationToken cancellationToken)
+    {
         var held = new List<string>();
         if (RegistryRules.IsSubject(actor.Value))
         {
@@ -787,8 +832,12 @@ internal sealed class AssignmentRules(IRoleStore roles, IMembershipStore members
                     .Where(membership => membership.Compartment == compartment)
                     .SelectMany(membership => membership.Roles));
         }
-        var lists = held.Distinct(StringComparer.Ordinal).Where(all.ContainsKey).Select(name => all[name].Assignable).ToList();
+        return held.Distinct(StringComparer.Ordinal).Where(all.ContainsKey).ToList();
+    }
 
+    private static Error? Covers(IReadOnlyList<string> held, IReadOnlyDictionary<string, Role> all, IReadOnlyCollection<string> roleNames)
+    {
+        var lists = held.Select(name => all[name].Assignable).ToList();
         foreach (var name in roleNames)
         {
             // A role gone from the catalogue of roles cannot be checked; it cannot be assigned either, and unassigning

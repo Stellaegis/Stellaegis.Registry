@@ -89,6 +89,33 @@ public static class RegistryErrors
     /// <summary>The code of <see cref="TransferStale"/>.</summary>
     public const string TransferStaleCode = "Transfer.Stale";
 
+    /// <summary>The code of <see cref="CompartmentNotActive"/>.</summary>
+    public const string CompartmentNotActiveCode = "Compartment.NotActive";
+
+    /// <summary>The code of <see cref="InvitationEmailInvalid"/>.</summary>
+    public const string InvitationEmailInvalidCode = "Invitation.EmailInvalid";
+
+    /// <summary>The code of <see cref="HandDeliveryClosed"/>.</summary>
+    public const string HandDeliveryClosedCode = "Invitation.HandDeliveryClosed";
+
+    /// <summary>The code of <see cref="NoInvitationSender"/>.</summary>
+    public const string NoInvitationSenderCode = "Invitation.NoSender";
+
+    /// <summary>The code of <see cref="AlreadyMember"/>.</summary>
+    public const string AlreadyMemberCode = "Invitation.AlreadyMember";
+
+    /// <summary>The code of <see cref="InvitationNotFound"/>.</summary>
+    public const string InvitationNotFoundCode = "Invitation.NotFound";
+
+    /// <summary>The code of <see cref="InvitationNotPending"/>.</summary>
+    public const string InvitationNotPendingCode = "Invitation.NotPending";
+
+    /// <summary>The code of <see cref="InvitationInvalid"/>.</summary>
+    public const string InvitationInvalidCode = "Invitation.Invalid";
+
+    /// <summary>The code of <see cref="InvitationStale"/>.</summary>
+    public const string InvitationStaleCode = "Invitation.Stale";
+
     /// <summary>The code of <see cref="UnknownOperation"/>.</summary>
     public const string UnknownOperationCode = "Catalog.UnknownOperation";
 
@@ -205,6 +232,42 @@ public static class RegistryErrors
     /// <summary>What the transfer assumed no longer holds: the proposer is no longer the owner, the recipient no longer an active member, or the compartment no longer active.</summary>
     public static Error TransferStale(Compartment compartment, string why)
         => Error.PreconditionFailed(TransferStaleCode, $"The transfer of the ownership of '{compartment}' no longer holds: {why}.");
+
+    /// <summary>The compartment is suspended or terminated: nobody is let in.</summary>
+    public static Error CompartmentNotActive(Compartment compartment)
+        => Error.PreconditionFailed(CompartmentNotActiveCode, $"Compartment '{compartment}' is not active.");
+
+    /// <summary>The address is not one an invitation can go to.</summary>
+    public static Error InvitationEmailInvalid(string email)
+        => Error.Validation(InvitationEmailInvalidCode, $"'{email}' is not an e-mail address.");
+
+    /// <summary>The host does not declare the hand delivery: an invitation is sent by e-mail.</summary>
+    public static Error HandDeliveryClosed()
+        => Error.Forbidden(HandDeliveryClosedCode, "The host does not let an invitation be handed over: it is sent by e-mail.");
+
+    /// <summary>The host has no sender of invitations: one is sent by e-mail only through an <see cref="IInvitationSender"/>.</summary>
+    public static Error NoInvitationSender()
+        => Error.PreconditionFailed(NoInvitationSenderCode, "The host registers no IInvitationSender: an invitation cannot be sent by e-mail.");
+
+    /// <summary>The address belongs to a member of the compartment already: their roles change by a direct assignment.</summary>
+    public static Error AlreadyMember(string email, Compartment compartment)
+        => Error.Conflict(AlreadyMemberCode, $"'{email}' is a member of '{compartment}' already: assign the roles directly.");
+
+    /// <summary>The invitation is not in the registry.</summary>
+    public static Error InvitationNotFound()
+        => Error.NotFound(InvitationNotFoundCode, "The invitation is not in the registry.");
+
+    /// <summary>The invitation is accepted or revoked already.</summary>
+    public static Error InvitationNotPending()
+        => Error.PreconditionFailed(InvitationNotPendingCode, "The invitation is accepted or revoked already.");
+
+    /// <summary>The token opens nothing: unknown, spent, revoked or lapsed — which the answer never tells apart.</summary>
+    public static Error InvitationInvalid()
+        => Error.NotFound(InvitationInvalidCode, "The invitation is invalid or has lapsed.");
+
+    /// <summary>What the invitation assumed no longer holds: it does not serve, and nothing is applied.</summary>
+    public static Error InvitationStale(string why)
+        => Error.PreconditionFailed(InvitationStaleCode, $"The invitation no longer holds: {why}.");
 
     /// <summary>The operation is not in the catalogue: no module declares it.</summary>
     public static Error UnknownOperation(string operation)

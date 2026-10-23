@@ -23,7 +23,7 @@ internal sealed class TestHost : IDisposable
     private readonly ServiceProvider _provider;
     private readonly IServiceScope _scope;
 
-    public TestHost(bool withSink = true, Action<IServiceCollection>? stores = null)
+    public TestHost(bool withSink = true, Action<IServiceCollection>? stores = null, Action<IServiceCollection>? configure = null)
     {
         var services = new ServiceCollection();
         services.AddLogging();
@@ -35,6 +35,7 @@ internal sealed class TestHost : IDisposable
             stores(services);
         if (withSink)
             services.AddStellaegisRightsSink(Sink);
+        configure?.Invoke(services);
         _provider = services.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true, ValidateOnBuild = true });
         _scope = _provider.CreateScope();
     }
@@ -135,4 +136,17 @@ public sealed class TestClock : TimeProvider
 
     /// <summary>Moves the clock forward.</summary>
     public void Advance(TimeSpan by) => _now += by;
+}
+
+/// <summary>Keeps the invitations sent, so that a test reads their token as the person would from the message.</summary>
+public sealed class CapturingInvitationSender : IInvitationSender
+{
+    public List<InvitationMessage> Sent { get; } = [];
+
+    public Task SendAsync(InvitationMessage message, CancellationToken cancellationToken = default)
+    {
+        lock (Sent)
+            Sent.Add(message);
+        return Task.CompletedTask;
+    }
 }

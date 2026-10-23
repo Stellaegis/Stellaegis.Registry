@@ -232,6 +232,14 @@ internal sealed class UserRepository(DbConnection connection, Func<DbTransaction
 
     private const string Selected = "subject as Subject, email as Email, display_name as DisplayName, status as Status, created_at as CreatedAt, created_by as CreatedBy, modified_at as ModifiedAt, modified_by as ModifiedBy";
 
+    public async Task<UserRecord?> FindByEmailAsync(string email, CancellationToken cancellationToken)
+    {
+        var row = await connection.QueryFirstOrDefaultAsync<Row>(new CommandDefinition(
+            $"select {Selected} from reg.users where lower(email) = lower(@email) order by subject limit 1",
+            new { email }, transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false);
+        return row is null ? null : ToRecord(row);
+    }
+
     public async Task<UserRecord?> GetAsync(string subject, CancellationToken cancellationToken)
     {
         var row = await connection.QuerySingleOrDefaultAsync<Row>(new CommandDefinition(
@@ -521,4 +529,85 @@ internal sealed class OperatorRepository(DbConnection connection, Func<DbTransac
         => connection.ExecuteAsync(new CommandDefinition(
             "delete from reg.operator_roles where subject = @subject and role = @role",
             new { subject, role }, transaction(), cancellationToken: cancellationToken));
+}
+
+/// <summary>The rows of <c>reg.invitations</c> and <c>reg.invitation_roles</c>.</summary>
+internal sealed class InvitationRepository(DbConnection connection, Func<DbTransaction?> transaction)
+{
+    private sealed record Row(
+        Guid InvitationId, string TokenHash, string Compartment, string Email, bool DesignatesOwner, string Delivery,
+        DateTime IssuedAt, string IssuedBy, DateTime ExpiresAt, DateTime? AcceptedAt, string? AcceptedBy, DateTime? RevokedAt, string? RevokedBy, string? Role);
+
+    private const string Select = """
+        select i.invitation_id as InvitationId, i.token_hash as TokenHash, i.compartment as Compartment, i.email as Email,
+               i.designates_owner as DesignatesOwner, i.delivery as Delivery, i.issued_at as IssuedAt, i.issued_by as IssuedBy,
+               i.expires_at as ExpiresAt, i.accepted_at as AcceptedAt, i.accepted_by as AcceptedBy, i.revoked_at as RevokedAt,
+               i.revoked_by as RevokedBy, r.role as Role
+        from reg.invitations i
+        left join reg.invitation_roles r on r.invitation_id = i.invitation_id
+        """;
+
+    public async Task<IReadOnlyList<Invitation>> ListAsync(string where, object parameters, CancellationToken cancellationToken)
+    {
+        var rows = await connection.QueryAsync<Row>(new CommandDefinition(
+            $"{Select} where {where} order by i.issued_at desc, i.invitation_id, r.role",
+            parameters, transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false);
+        return rows.GroupBy(row => row.InvitationId).Select(group =>
+        {
+            var first = group.First();
+            return new Invitation(first.InvitationId, first.TokenHash, Compartment.Parse(first.Compartment), first.Email,
+                group.Where(row => row.Role is not null).Select(row => row.Role!).ToList(), first.DesignatesOwner,
+                first.Delivery == "hand" ? InvitationDelivery.Hand : InvitationDelivery.Email,
+                new Stamp(Utc(first.IssuedAt), Actor.Parse(first.IssuedBy)), Utc(first.ExpiresAt),
+                first.AcceptedAt is { } accepted ? Utc(accepted) : null, first.AcceptedBy,
+                first.RevokedAt is { } revoked ? new Stamp(Utc(revoked), Actor.Parse(first.RevokedBy!)) : null);
+        }).ToList();
+    }
+
+    public async Task InsertAsync(Invitation invitation, CancellationToken cancellationToken)
+    {
+        await connection.ExecuteAsync(new CommandDefinition(
+            """
+            insert into reg.invitations (invitation_id, token_hash, compartment, email, designates_owner, delivery, issued_at, issued_by, expires_at)
+            values (@id, @hash, @compartment, @email, @designatesOwner, @delivery, @issuedAt, @issuedBy, @expiresAt)
+            """,
+            new
+            {
+                id = invitation.InvitationId,
+                hash = invitation.TokenHash,
+                compartment = invitation.Compartment.Value,
+                email = invitation.Email,
+                designatesOwner = invitation.DesignatesOwner,
+                delivery = invitation.Delivery == InvitationDelivery.Hand ? "hand" : "email",
+                issuedAt = Names.Utc(invitation.Issued.At),
+                issuedBy = invitation.Issued.By.Value,
+                expiresAt = Names.Utc(invitation.ExpiresAt),
+            }, transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false);
+        if (invitation.Roles.Count > 0)
+            await connection.ExecuteAsync(new CommandDefinition(
+                "insert into reg.invitation_roles (invitation_id, role) select @id, unnest(@roles::text[])",
+                new { id = invitation.InvitationId, roles = invitation.Roles.Distinct(StringComparer.Ordinal).ToArray() },
+                transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false);
+    }
+
+    public async Task<bool> RevokeAsync(Guid id, Stamp revoked, CancellationToken cancellationToken)
+        => await connection.ExecuteAsync(new CommandDefinition(
+            "update reg.invitations set revoked_at = @at, revoked_by = @by where invitation_id = @id and accepted_at is null and revoked_at is null",
+            new { id, at = Names.Utc(revoked.At), by = revoked.By.Value }, transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false) == 1;
+
+    // The token is spent atomically: of two acceptances at once, one updates the row.
+    public async Task<bool> TryAcceptAsync(string hash, string subject, DateTimeOffset at, CancellationToken cancellationToken)
+        => await connection.ExecuteAsync(new CommandDefinition(
+            """
+            update reg.invitations set accepted_at = @at, accepted_by = @subject
+            where token_hash = @hash and accepted_at is null and revoked_at is null and expires_at > @at
+            """,
+            new { hash, subject, at = Names.Utc(at) }, transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false) == 1;
+
+    public Task<int> DeleteDeadBeforeAsync(DateTimeOffset before, CancellationToken cancellationToken)
+        => connection.ExecuteAsync(new CommandDefinition(
+            "delete from reg.invitations where accepted_at is null and (expires_at < @before or revoked_at < @before)",
+            new { before = Names.Utc(before) }, transaction(), cancellationToken: cancellationToken));
+
+    private static DateTimeOffset Utc(DateTime value) => new(DateTime.SpecifyKind(value, DateTimeKind.Utc));
 }

@@ -298,4 +298,33 @@ public sealed class AdminEndpointsTests
         Assert.Equal(HttpStatusCode.NotFound, (await operatorClient.DeleteAsync("/api/admin/registry/compartments/globex/owner/transfer", Ct)).StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden, (await app.ClientAs(Jane, Reads).PutAsJsonAsync("/api/admin/registry/compartments/globex/owner/transfer", new ProposeTransferRequest(Jane), Ct)).StatusCode);
     }
+
+    [Fact]
+    public async Task Invitations_are_issued_listed_and_revoked_through_their_routes_and_a_host_that_can_deliver_none_is_refused()
+    {
+        await using var app = await StartAsync(app =>
+        {
+            MapPerOperation(app);
+            app.MapGroup("/api/admin").MapRegistryInvitationEndpoints().RequireAuthorizationPerOperation(operation => operation.ToString());
+        }, configure: builder => builder.Services.Configure<RegistryOptions>(options => options.Invitations.HandDelivery = true));
+        using (var scope = app.Services.CreateScope())
+            Assert.True((await scope.ServiceProvider.GetRequiredService<IOperators>().AssignAsync(John, "super_admin", By, Ct)).IsSuccess);
+        var client = app.ClientAs(John, Everything);
+
+        var issued = await client.PostAsJsonAsync("/api/admin/registry/compartments/acme/invitations", new InviteRequest("nina@acme.test", ["reader"], "hand"), Ct);
+        Assert.Equal(HttpStatusCode.Created, issued.StatusCode);
+        var body = (await issued.Content.ReadFromJsonAsync<InvitationIssued>(Ct))!;
+        Assert.False(string.IsNullOrEmpty(body.Token));
+        Assert.Equal(("nina@acme.test", "hand", John), (body.Invitation.Email, body.Invitation.Delivery, body.Invitation.IssuedBy));
+        var listed = Assert.Single((await client.GetFromJsonAsync<InvitationSummary[]>("/api/admin/registry/compartments/acme/invitations", Ct))!);
+        Assert.Equal(body.Invitation.InvitationId, listed.InvitationId);
+        Assert.Equal(HttpStatusCode.BadRequest, (await client.PostAsJsonAsync("/api/admin/registry/compartments/acme/invitations", new InviteRequest("nina@acme.test", ["reader"], "sms"), Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await app.ClientAs(Jane, Reads).PostAsJsonAsync("/api/admin/registry/compartments/acme/invitations", new InviteRequest("x@acme.test", []), Ct)).StatusCode);
+
+        Assert.Equal(HttpStatusCode.NoContent, (await client.DeleteAsync($"/api/admin/registry/invitations/{listed.InvitationId}", Ct)).StatusCode);
+        Assert.NotNull((await client.GetFromJsonAsync<InvitationSummary[]>("/api/admin/registry/compartments/acme/invitations", Ct))!.Single().RevokedAt);
+
+        var refused = await Assert.ThrowsAsync<InvalidOperationException>(() => StartAsync(app => app.MapGroup("/api/admin").MapRegistryInvitationEndpoints()));
+        Assert.Contains("IInvitationSender", refused.Message);
+    }
 }

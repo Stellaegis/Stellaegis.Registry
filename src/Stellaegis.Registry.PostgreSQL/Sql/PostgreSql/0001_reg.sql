@@ -7,8 +7,8 @@
 -- data rights by the installation. The record of the scripts applied is the installation's,
 -- reg._schema_migrations, not this script's.
 --
--- Eleven tables: the compartments and the transfers of their ownership with the roles a transfer
--- keeps, the users (the projection of the accounts of Identity), the catalogue of the operations the
+-- Thirteen tables: the compartments and the transfers of their ownership with the roles a transfer
+-- keeps, the invitations with the roles they give, the users (the projection of the accounts of Identity), the catalogue of the operations the
 -- modules declare, the roles with their operations and the roles they let their holder assign, and
 -- the two parallel models of the rights — the persons in the compartments (memberships,
 -- member_roles) and the operators of the platform (operator_roles) — never mixed. The effective rights are not here:
@@ -98,6 +98,9 @@ comment on table  reg.users          is 'The projection of the accounts of Ident
 
 alter table reg.compartments
   add constraint fk_compartments_owner foreign key (owner_subject) references reg.users (subject);
+
+-- The address of an invitation finds whether it belongs to a user already.
+create index ix_users_email on reg.users (lower(email));
 comment on column reg.users.subject  is 'The sub of the account: a GUID written as 32 hex digits.';
 comment on column reg.users.status   is 'active, or deactivated: blocked or deleted in Identity, rights withdrawn, memberships kept.';
 comment on column reg.users.created_by  is 'The actor who recorded the user: the person themselves when they registered, or the installation.';
@@ -293,3 +296,58 @@ create table reg.ownership_transfer_kept_roles (
 );
 
 comment on table reg.ownership_transfer_kept_roles is 'The roles the outgoing owner keeps once the transfer is done. One row per (compartment, role); gone with the transfer.';
+
+-- ── Invitations ──────────────────────────────────────────────────────────────
+-- An invitation is an assignment deferred: roles of its author's assignable list, in a compartment, to
+-- an address, taking effect at its acceptance. Only the SHA-256 of its token is kept, in hexadecimal.
+-- Accepted, it stays as long as the account; lapsed or revoked, it is purged after its retention. The
+-- roles it gives are names, without a key to reg.roles: an accepted invitation keeps what it gave,
+-- and a role deleted since is checked again at an acceptance.
+
+create table reg.invitations (
+  invitation_id     uuid         not null,
+  token_hash        char(64)     not null,
+  compartment       varchar(63)  not null,
+  email             text         not null,
+  designates_owner  boolean      not null,
+  delivery          varchar(5)   not null,
+  issued_at         timestamptz  not null,
+  issued_by         varchar(128) not null,
+  expires_at        timestamptz  not null,
+  accepted_at       timestamptz,
+  accepted_by       varchar(32),
+  revoked_at        timestamptz,
+  revoked_by        varchar(128),
+
+  constraint pk_invitations primary key (invitation_id),
+  constraint ux_invitations_token_hash unique (token_hash),
+  constraint ck_invitations_token_hash check (token_hash ~ '^[0-9a-f]{64}$'),
+  constraint ck_invitations_email check (char_length(email) between 3 and 320 and email = lower(email)),
+  constraint ck_invitations_delivery check (delivery in ('email', 'hand')),
+  constraint ck_invitations_issued_by check (issued_by ~ '^[^[:space:][:cntrl:]]([^[:cntrl:]]{0,126}[^[:space:][:cntrl:]])?$'),
+  constraint ck_invitations_expires_at check (expires_at > issued_at),
+  constraint ck_invitations_accepted check ((accepted_at is null) = (accepted_by is null)),
+  constraint ck_invitations_revoked check ((revoked_at is null) = (revoked_by is null)),
+  constraint ck_invitations_revoked_by check (revoked_by ~ '^[^[:space:][:cntrl:]]([^[:cntrl:]]{0,126}[^[:space:][:cntrl:]])?$'),
+  constraint ck_invitations_one_end check (accepted_at is null or revoked_at is null),
+  constraint fk_invitations_compartment foreign key (compartment) references reg.compartments (compartment),
+  constraint fk_invitations_accepted_by foreign key (accepted_by) references reg.users (subject)
+);
+
+comment on table  reg.invitations            is 'The invitations: roles of a compartment given to an address, taking effect at the acceptance. One row per invitation.';
+comment on column reg.invitations.token_hash is 'The SHA-256 of the token, in hexadecimal: the token is in the link only.';
+comment on column reg.invitations.issued_by  is 'The author, who answers for the roles it gives and grants them at the acceptance.';
+comment on column reg.invitations.accepted_by is 'The account that accepted it; the invitation then stays as long as the account.';
+
+create index ix_invitations_compartment_email on reg.invitations (compartment, email);
+
+create table reg.invitation_roles (
+  invitation_id  uuid         not null,
+  role           varchar(63)  not null,
+
+  constraint pk_invitation_roles primary key (invitation_id, role),
+  constraint ck_invitation_roles_role check (role ~ '^[a-z]([a-z0-9_]{0,61}[a-z0-9])?$' and role !~ '__'),
+  constraint fk_invitation_roles_invitation foreign key (invitation_id) references reg.invitations (invitation_id) on delete cascade
+);
+
+comment on table reg.invitation_roles is 'The roles each invitation gives, by name. One row per (invitation, role); gone with the invitation.';

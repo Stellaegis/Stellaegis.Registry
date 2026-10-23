@@ -61,6 +61,12 @@ public static class RegistryOperations
     public static readonly Operation OperatorsWrite = new("operators", "write", OperationKind.Write);
 
     /// <summary>
+    /// Issuing or revoking an invitation, <c>invitations.write</c>: distinct from <c>memberships.write</c>, since letting a
+    /// person in from outside is not reorganizing the roles of the members, and sending e-mails is abused apart.
+    /// </summary>
+    public static readonly Operation InvitationsWrite = new("invitations", "write", OperationKind.Write);
+
+    /// <summary>
     /// Proposing, accepting, declining or cancelling a transfer of the ownership of a compartment, <c>ownership.write</c>.
     /// It opens the routes; the registry checks the author is the owner, or the recipient.
     /// </summary>
@@ -70,7 +76,7 @@ public static class RegistryOperations
     public static IReadOnlyList<Operation> All { get; } =
     [
         CompartmentsRead, CompartmentsWrite, DirectoryRead, DirectoryWrite, CatalogRead,
-        RolesRead, RolesWrite, MembershipsRead, MembershipsWrite, OperatorsRead, OperatorsWrite, OwnershipWrite,
+        RolesRead, RolesWrite, MembershipsRead, MembershipsWrite, OperatorsRead, OperatorsWrite, OwnershipWrite, InvitationsWrite,
     ];
 }
 

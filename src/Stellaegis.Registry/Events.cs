@@ -37,6 +37,25 @@ public sealed record OwnershipChangedEvent : IEvent
     public required Actor By { get; init; }
 }
 
+/// <summary>Published when an invitation was accepted: its roles took effect. It never carries the token.</summary>
+public sealed record InvitationAcceptedEvent : IEvent
+{
+    /// <inheritdoc/>
+    public required DateTimeOffset OccurredAt { get; init; }
+
+    /// <summary>The invitation.</summary>
+    public required Guid InvitationId { get; init; }
+
+    /// <summary>The compartment it admitted to.</summary>
+    public required Compartment Compartment { get; init; }
+
+    /// <summary>The account that accepted it.</summary>
+    public required string Subject { get; init; }
+
+    /// <summary>Its author, who granted what it gave.</summary>
+    public required Actor By { get; init; }
+}
+
 /// <summary>Published when a user was recorded, deactivated or reactivated.</summary>
 public sealed record UserChangedEvent : IEvent
 {

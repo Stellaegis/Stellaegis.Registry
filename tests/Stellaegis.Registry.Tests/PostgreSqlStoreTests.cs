@@ -94,6 +94,9 @@ public sealed class PostgreSqlStoreTests(PostgreSqlFixture database) : IAsyncLif
     [InlineData("insert into reg.roles values ('ops', 'platform', 'administration', 'x', true, 'none', false, false, now(), 'job:tests', now(), 'job:tests')", "23514")]
     [InlineData("insert into reg.role_assignable_roles values ('nobody', 'nobody')", "23503")]
     [InlineData("insert into reg.compartments values ('acme', 'x', 'active', now(), 'job:tests', now(), 'job:tests', 'jane')", "23514")]
+    [InlineData("insert into reg.invitations (invitation_id, token_hash, compartment, email, designates_owner, delivery, issued_at, issued_by, expires_at) values (gen_random_uuid(), 'ZZ', 'acme', 'a@b.c', false, 'email', now(), 'job:tests', now() + interval '1 day')", "23514")]
+    [InlineData("insert into reg.invitations (invitation_id, token_hash, compartment, email, designates_owner, delivery, issued_at, issued_by, expires_at) values (gen_random_uuid(), repeat('a', 64), 'acme', 'A@b.c', false, 'email', now(), 'job:tests', now() + interval '1 day')", "23514")]
+    [InlineData("insert into reg.invitations (invitation_id, token_hash, compartment, email, designates_owner, delivery, issued_at, issued_by, expires_at) values (gen_random_uuid(), repeat('a', 64), 'acme', 'a@b.c', false, 'sms', now(), 'job:tests', now() + interval '1 day')", "23514")]
     [InlineData("insert into reg.ownership_transfers values ('acme', '3f2504e04f8941d39a0c0305e82c3301', '3f2504e04f8941d39a0c0305e82c3301', now(), 'job:tests', now() + interval '7 days')", "23514")]
     [InlineData("insert into reg.ownership_transfers values ('nowhere', '3f2504e04f8941d39a0c0305e82c3301', '8d1e3b2a6c4f4a8e9b1d2f3e4a5b6c7d', now(), 'job:tests', now() + interval '7 days')", "23503")]
     [InlineData("insert into reg.role_operations values ('nobody', 'items.read')", "23503")]
@@ -353,5 +356,33 @@ public sealed class PostgreSqlStoreTests(PostgreSqlFixture database) : IAsyncLif
         Assert.Equal([RegistryRoles.Owner], members[John].Roles);
         Assert.Empty(members[Jane].Roles);
         Assert.Null(await Compartments.GetTransferAsync(initech, Ct));
+    }
+
+    private IInvitationStore InvitationStore => Host.Services.GetRequiredService<IInvitationStore>();
+
+    [Fact]
+    public async Task An_invitation_is_kept_by_the_hash_of_its_token_accepted_once_and_purged_when_dead()
+    {
+        await SeedAsync();
+        Invitation Issued(string email, DateTimeOffset expiresAt) => new(Guid.NewGuid(), Convert.ToHexStringLower(Guid.NewGuid().ToByteArray()).PadRight(64, '0'),
+            Acme, email, ["reader", "accountant"], false, InvitationDelivery.Hand, Granted, expiresAt);
+        var live = Issued("nina@acme.test", Now.AddDays(7));
+        await InvitationStore.InsertAsync(live, Ct);
+
+        var read = (await InvitationStore.GetByHashAsync(live.TokenHash, Ct))!;
+        Assert.Equal((live.InvitationId, "nina@acme.test", InvitationDelivery.Hand, Now.AddDays(7)), (read.InvitationId, read.Email, read.Delivery, read.ExpiresAt));
+        Assert.Equal(["accountant", "reader"], read.Roles.Order(StringComparer.Ordinal));
+        Assert.Equal(live.InvitationId, (await InvitationStore.GetAsync(live.InvitationId, Ct))!.InvitationId);
+
+        Assert.True(await InvitationStore.TryAcceptAsync(live.TokenHash, Jane, Now.AddDays(1), Ct));
+        Assert.False(await InvitationStore.TryAcceptAsync(live.TokenHash, John, Now.AddDays(1), Ct));
+        Assert.False(await InvitationStore.RevokeAsync(live.InvitationId, Granted, Ct));
+        Assert.Equal(Jane, (await InvitationStore.GetAsync(live.InvitationId, Ct))!.AcceptedBy);
+
+        var lapsed = Issued("ola@acme.test", Now.AddDays(1));
+        await InvitationStore.InsertAsync(lapsed, Ct);
+        Assert.False(await InvitationStore.TryAcceptAsync(lapsed.TokenHash, John, Now.AddDays(2), Ct));
+        Assert.Equal(1, await InvitationStore.DeleteDeadBeforeAsync(Now.AddDays(40), Ct));
+        Assert.Equal([live.InvitationId], (await InvitationStore.ListByCompartmentAsync(Acme, Ct)).Select(i => i.InvitationId));
     }
 }

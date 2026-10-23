@@ -20,6 +20,8 @@ public sealed class InMemoryRegistryData
 
     internal ConcurrentDictionary<Compartment, OwnershipTransfer> Transfers { get; } = new();
 
+    internal ConcurrentDictionary<Guid, Invitation> Invitations { get; } = new();
+
     // The ownership of a compartment changes under this lock: its owner, its membership and roles, at once.
     internal object OwnershipLock { get; } = new();
 
@@ -33,6 +35,7 @@ public sealed class InMemoryRegistryData
         Memberships.Clear();
         Operators.Clear();
         Transfers.Clear();
+        Invitations.Clear();
     }
 
     internal static IReadOnlyCollection<string> Snapshot(Dictionary<string, Stamp> set)
@@ -119,6 +122,9 @@ internal sealed class InMemoryCompartmentStore(InMemoryRegistryData data) : ICom
 
 internal sealed class InMemoryUserStore(InMemoryRegistryData data) : IUserStore
 {
+    public Task<UserRecord?> FindByEmailAsync(string email, CancellationToken cancellationToken = default)
+        => Task.FromResult(data.Users.Values.FirstOrDefault(user => string.Equals(user.Email, email, StringComparison.OrdinalIgnoreCase)));
+
     public Task<UserRecord?> GetAsync(string subject, CancellationToken cancellationToken = default)
         => Task.FromResult(data.Users.GetValueOrDefault(subject));
 
@@ -257,5 +263,60 @@ internal sealed class InMemoryOperatorStore(InMemoryRegistryData data) : IOperat
             lock (set)
                 set.Remove(role);
         return Task.CompletedTask;
+    }
+}
+
+internal sealed class InMemoryInvitationStore(InMemoryRegistryData data) : IInvitationStore
+{
+    public Task InsertAsync(Invitation invitation, CancellationToken cancellationToken = default)
+    {
+        data.Invitations[invitation.InvitationId] = invitation;
+        return Task.CompletedTask;
+    }
+
+    public Task<Invitation?> GetAsync(Guid invitationId, CancellationToken cancellationToken = default)
+        => Task.FromResult(data.Invitations.GetValueOrDefault(invitationId));
+
+    public Task<Invitation?> GetByHashAsync(string tokenHash, CancellationToken cancellationToken = default)
+        => Task.FromResult(data.Invitations.Values.FirstOrDefault(invitation => invitation.TokenHash == tokenHash));
+
+    public Task<IReadOnlyList<Invitation>> ListByCompartmentAsync(Compartment compartment, CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyList<Invitation>>(data.Invitations.Values.Where(invitation => invitation.Compartment == compartment)
+            .OrderByDescending(invitation => invitation.Issued.At).ToList());
+
+    public Task<bool> RevokeAsync(Guid invitationId, Stamp revoked, CancellationToken cancellationToken = default)
+    {
+        lock (data.Invitations)
+        {
+            if (!data.Invitations.TryGetValue(invitationId, out var invitation) || invitation.AcceptedAt is not null || invitation.Revoked is not null)
+                return Task.FromResult(false);
+            data.Invitations[invitationId] = invitation with { Revoked = revoked };
+            return Task.FromResult(true);
+        }
+    }
+
+    public Task<bool> TryAcceptAsync(string tokenHash, string subject, DateTimeOffset at, CancellationToken cancellationToken = default)
+    {
+        lock (data.Invitations)
+        {
+            var invitation = data.Invitations.Values.FirstOrDefault(candidate => candidate.TokenHash == tokenHash);
+            if (invitation is null || !invitation.IsPendingAt(at))
+                return Task.FromResult(false);
+            data.Invitations[invitation.InvitationId] = invitation with { AcceptedAt = at, AcceptedBy = subject };
+            return Task.FromResult(true);
+        }
+    }
+
+    public Task<int> DeleteDeadBeforeAsync(DateTimeOffset before, CancellationToken cancellationToken = default)
+    {
+        lock (data.Invitations)
+        {
+            var dead = data.Invitations.Values
+                .Where(invitation => invitation.AcceptedAt is null && (invitation.ExpiresAt < before || invitation.Revoked?.At < before))
+                .Select(invitation => invitation.InvitationId).ToList();
+            foreach (var id in dead)
+                data.Invitations.TryRemove(id, out _);
+            return Task.FromResult(dead.Count);
+        }
     }
 }

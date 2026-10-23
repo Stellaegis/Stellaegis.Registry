@@ -51,6 +51,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IRoleStore>(provider => provider.GetRequiredService<PostgreSqlRegistryStore>());
         services.TryAddSingleton<IMembershipStore>(provider => provider.GetRequiredService<PostgreSqlRegistryStore>());
         services.TryAddSingleton<IOperatorStore>(provider => provider.GetRequiredService<PostgreSqlRegistryStore>());
+        services.TryAddSingleton<IInvitationStore>(provider => provider.GetRequiredService<PostgreSqlRegistryStore>());
         services.AddStellaegisModuleDatabase(RegistryDatabase.Value,
             (provider, cancellationToken) => provider.GetRequiredService<PostgreSqlRegistryStore>().OpenConnectionAsync(cancellationToken));
         return services.AddStellaegisRegistry();
