@@ -173,20 +173,20 @@ public static class Callers
 
 /// <summary>
 /// Where the effective rights the registry computes go: the projection of Access, in the same process. One
-/// class, one line per method — the two ports have the same shape on purpose. A host whose decision point runs
-/// apart implements the same five methods on the projection routes of Access.
+/// class, one line per method — the two ports have the same shape on purpose; each right carries whether its
+/// operation requires a second factor, which Access asks the session for. A host whose decision point runs apart
+/// implements the same five methods on the projection routes of Access.
 /// </summary>
 public sealed class AccessRightsSink(IAccessProjection projection) : IRightsSink
 {
     public Task ReplaceMembershipsAsync(string subject, IReadOnlyCollection<Compartment> compartments, CancellationToken cancellationToken = default)
         => projection.ReplaceMembershipsAsync(subject, compartments, cancellationToken);
 
-    // Access 5 decides without a second factor: the requirement each grant carries waits for its major.
     public Task ReplaceUserGrantsAsync(string subject, Compartment compartment, IReadOnlyCollection<OperationGrant> grants, CancellationToken cancellationToken = default)
-        => projection.ReplaceUserGrantsAsync(subject, compartment, grants.Select(grant => grant.Operation).ToList(), cancellationToken);
+        => projection.ReplaceUserGrantsAsync(subject, compartment, grants.Select(grant => new AccessGrant(grant.Operation, grant.RequiresSecondFactor)).ToList(), cancellationToken);
 
     public Task ReplaceAdminGrantsAsync(string subject, IReadOnlyCollection<OperationGrant> grants, CancellationToken cancellationToken = default)
-        => projection.ReplaceAdminGrantsAsync(subject, grants.Select(grant => grant.Operation).ToList(), cancellationToken);
+        => projection.ReplaceAdminGrantsAsync(subject, grants.Select(grant => new AccessGrant(grant.Operation, grant.RequiresSecondFactor)).ToList(), cancellationToken);
 
     public Task RemoveCompartmentAsync(Compartment compartment, CancellationToken cancellationToken = default)
         => projection.RemoveCompartmentAsync(compartment, cancellationToken);

@@ -18,9 +18,9 @@
     <PackageVersion Include="Stellaegis.Issuer.PostgreSQL" Version="5.2.0" />
     <PackageVersion Include="Stellaegis.Issuer.Client" Version="5.2.0" />
     <PackageVersion Include="Stellaegis.Issuer.Server" Version="5.2.0" />
-    <PackageVersion Include="Stellaegis.Access" Version="5.0.0" />
-    <PackageVersion Include="Stellaegis.Access.PostgreSQL" Version="5.0.0" />
-    <PackageVersion Include="Stellaegis.Access.AspNetCore" Version="5.0.0" />
+    <PackageVersion Include="Stellaegis.Access" Version="6.0.0" />
+    <PackageVersion Include="Stellaegis.Access.PostgreSQL" Version="6.0.0" />
+    <PackageVersion Include="Stellaegis.Access.AspNetCore" Version="6.0.0" />
     <!-- PostgreSQL -->
     <PackageVersion Include="Dapper" Version="2.1.89" />
     <PackageVersion Include="Npgsql" Version="10.0.3" />

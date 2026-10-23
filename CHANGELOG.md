@@ -21,8 +21,9 @@ with each grant.
    `reg` (`drop schema reg cascade`) and run the installation again. The verification at startup refuses a schema
    installed from the 5.x script, and says so.
 2. **Adapt the sink.** `IRightsSink.ReplaceUserGrantsAsync` and `ReplaceAdminGrantsAsync` take
-   `IReadOnlyCollection<OperationGrant>`, the operation and whether it requires a second factor. On Access 5, hand
-   over `grants.Select(grant => grant.Operation)`.
+   `IReadOnlyCollection<OperationGrant>`, the operation and whether it requires a second factor; Access 6.0.0 takes
+   them as `AccessGrant`s, `grants.Select(grant => new AccessGrant(grant.Operation, grant.RequiresSecondFactor))`.
+   Every operation of the shared space requires one: an operator signs in with a second factor.
 3. **Give the declared roles a category**, and the roles their holder assigns: `RoleDeclaration(name, scope,
    category, displayName, operations, assignable)`. A role whose list is empty lets its holder assign nothing — an
    administration role that assigned in 5.x needs its `AssignableRoles`. Declare the operations of `owner`, the role

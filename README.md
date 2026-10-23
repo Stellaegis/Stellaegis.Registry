@@ -54,8 +54,7 @@ app.MapGroup("/api/admin").MapRegistryAdminEndpoints()
 ```
 
 The adapter, the two ports having the same shape on purpose. Each grant says whether its operation requires a
-second factor, for a decision point that reads the `amr` of the session to refuse it without one; the example, on
-Access 5, hands over the operations alone:
+second factor, and Access, reading the `amr` of the session, refuses it without one:
 
 ```csharp
 public sealed class AccessRightsSink(IAccessProjection projection) : IRightsSink
@@ -63,9 +62,9 @@ public sealed class AccessRightsSink(IAccessProjection projection) : IRightsSink
     public Task ReplaceMembershipsAsync(string subject, IReadOnlyCollection<Compartment> compartments, CancellationToken ct = default)
         => projection.ReplaceMembershipsAsync(subject, compartments, ct);
     public Task ReplaceUserGrantsAsync(string subject, Compartment compartment, IReadOnlyCollection<OperationGrant> grants, CancellationToken ct = default)
-        => projection.ReplaceUserGrantsAsync(subject, compartment, grants.Select(grant => grant.Operation).ToList(), ct);
+        => projection.ReplaceUserGrantsAsync(subject, compartment, grants.Select(grant => new AccessGrant(grant.Operation, grant.RequiresSecondFactor)).ToList(), ct);
     public Task ReplaceAdminGrantsAsync(string subject, IReadOnlyCollection<OperationGrant> grants, CancellationToken ct = default)
-        => projection.ReplaceAdminGrantsAsync(subject, grants.Select(grant => grant.Operation).ToList(), ct);
+        => projection.ReplaceAdminGrantsAsync(subject, grants.Select(grant => new AccessGrant(grant.Operation, grant.RequiresSecondFactor)).ToList(), ct);
     public Task RemoveCompartmentAsync(Compartment compartment, CancellationToken ct = default)
         => projection.RemoveCompartmentAsync(compartment, ct);
     public Task RemoveSubjectAsync(string subject, CancellationToken ct = default)

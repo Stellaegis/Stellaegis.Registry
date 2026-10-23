@@ -67,6 +67,12 @@ HTTPS development certificate of the machine must be trusted (`dotnet dev-certs 
 `-k`. The example runs in the `Development` environment: the issuer signs with development certificates, which it
 refuses anywhere else. Its mailer writes to the log: a link or a code the pages send is read there.
 
+**Every operator signs in with a second factor.** Each operation of the shared space requires one: a session opened
+with a password alone reads and writes the inventory of `acme` — the operations of its owner require none —, and is
+refused every route of `/api/admin` with `Access.SecondFactorRequired`. Once activated, the administrator enrolls an
+authenticator on `/account/mfa/setup` — the QR code, or the key under it —, keeps the recovery codes, and signs in
+again: the code is asked on `/login/mfa`, and the tokens carry `amr` `pwd`, `otp`, `mfa`.
+
 ## Validating
 
 Some acts wait for a second channel: assigning a platform role, creating a role or changing what it grants, rescuing
@@ -102,7 +108,7 @@ function Get-Token {
   $code = Read-Host "code"
   (curl.exe -sk "$base/connect/token" -d grant_type=authorization_code -d client_id=desktop -d code=$code -d code_verifier=$verifier -d redirect_uri=http://127.0.0.1:7890/callback | ConvertFrom-Json).access_token
 }
-$admin = Get-Token    # sign in as admin@acme.test, once activated
+$admin = Get-Token    # sign in as admin@acme.test, with the code of the authenticator
 ```
 
 Then the chain:
@@ -172,5 +178,4 @@ A deployment. One database and one role for four schemas, a secret re-applied fr
 (`Stellaegis:Issuer:Clients:inventory:Secret`, so that a service's configuration can name the same — in a deployment
 the installation prints it once and it goes to the one service that uses it), development certificates, keys of
 the deployment written in `appsettings.json`, a mailer that writes to the log, no scheduler for the purges of
-Identity and of the invitations. And Access 5 decides without a second factor: the requirement each grant carries
-waits for its major. Everything else is what a host does.
+Identity and of the invitations. Everything else is what a host does.
