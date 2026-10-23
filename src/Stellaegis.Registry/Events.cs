@@ -56,6 +56,44 @@ public sealed record InvitationAcceptedEvent : IEvent
     public required Actor By { get; init; }
 }
 
+/// <summary>Published when a sensitive act was proposed for a validation.</summary>
+public sealed record ActProposedEvent : IEvent
+{
+    /// <inheritdoc/>
+    public required DateTimeOffset OccurredAt { get; init; }
+
+    /// <summary>The act.</summary>
+    public required Guid ActId { get; init; }
+
+    /// <summary>What it does.</summary>
+    public required PendingActKind Kind { get; init; }
+
+    /// <summary>Its author.</summary>
+    public required Actor By { get; init; }
+}
+
+/// <summary>Published when an act waiting was validated — and applied — or rejected.</summary>
+public sealed record PendingActClosedEvent : IEvent
+{
+    /// <inheritdoc/>
+    public required DateTimeOffset OccurredAt { get; init; }
+
+    /// <summary>The act.</summary>
+    public required Guid ActId { get; init; }
+
+    /// <summary>What it does.</summary>
+    public required PendingActKind Kind { get; init; }
+
+    /// <summary>Whether it was validated; rejected otherwise.</summary>
+    public required bool Validated { get; init; }
+
+    /// <summary>Its author.</summary>
+    public required Actor ProposedBy { get; init; }
+
+    /// <summary>Who validated or rejected it.</summary>
+    public required Actor By { get; init; }
+}
+
 /// <summary>Published when a user was recorded, deactivated or reactivated.</summary>
 public sealed record UserChangedEvent : IEvent
 {

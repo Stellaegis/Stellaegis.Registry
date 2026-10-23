@@ -29,13 +29,17 @@ public static class ServiceCollectionExtensions
         services.TryAddScoped<Ownership>();
         services.AddOptions<RegistryOptions>();
         services.TryAddScoped<IInvitations, Invitations>();
+        services.TryAddScoped<ActProposals>();
+        services.TryAddScoped<IValidations, Validations>();
         services.TryAddScoped<IOwnership>(provider => provider.GetRequiredService<Ownership>());
         services.TryAddScoped<ICatalog, Catalog>();
-        services.TryAddScoped<IRoles, Roles>();
+        services.TryAddScoped<Roles>();
+        services.TryAddScoped<IRoles>(provider => provider.GetRequiredService<Roles>());
         services.TryAddScoped<ICompartments, Compartments>();
         services.TryAddScoped<IUserDirectory, UserDirectory>();
         services.TryAddScoped<IMemberships, Memberships>();
-        services.TryAddScoped<IOperators, Operators>();
+        services.TryAddScoped<Operators>();
+        services.TryAddScoped<IOperators>(provider => provider.GetRequiredService<Operators>());
         return services;
     }
 
@@ -54,6 +58,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IMembershipStore, InMemoryMembershipStore>();
         services.TryAddSingleton<IOperatorStore, InMemoryOperatorStore>();
         services.TryAddSingleton<IInvitationStore, InMemoryInvitationStore>();
+        services.TryAddSingleton<IPendingActStore, InMemoryPendingActStore>();
         return services.AddStellaegisRegistry();
     }
 

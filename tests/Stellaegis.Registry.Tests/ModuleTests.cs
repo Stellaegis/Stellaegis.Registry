@@ -11,11 +11,11 @@ public sealed class ModuleTests
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     [Fact]
-    public void The_module_has_no_compartment_and_thirteen_operations()
+    public void The_module_has_no_compartment_and_fifteen_operations()
     {
         Assert.Equal("registry", RegistryModule.Name);
         Assert.Equal(ModuleCompartments.None, RegistryModule.Declaration.Compartments);
-        Assert.Equal(13, RegistryModule.Declaration.Operations.Count);
+        Assert.Equal(15, RegistryModule.Declaration.Operations.Count);
         Assert.Contains(RegistryOperations.InvitationsWrite, RegistryModule.Declaration.Operations);
         Assert.Contains(RegistryOperations.MembershipsWrite, RegistryModule.Declaration.Operations);
         Assert.Contains(RegistryOperations.OwnershipWrite, RegistryModule.Declaration.Operations);

@@ -34,7 +34,9 @@ namespace Stellaegis.Registry.AspNetCore;
 ///   <item><c>GET registry/memberships/compartments/{compartment}</c>, <c>GET registry/memberships/users/{subject}</c> — <c>memberships.read</c></item>
 ///   <item><c>PUT registry/memberships/{compartment}/{subject}</c>, <c>DELETE …</c>, <c>PUT …/roles/{role}</c>, <c>DELETE …/roles/{role}</c> — <c>memberships.write</c></item>
 ///   <item><c>GET registry/operators</c>, <c>GET registry/operators/{subject}</c> — <c>operators.read</c></item>
-///   <item><c>PUT registry/operators/{subject}/roles/{role}</c>, <c>DELETE …</c> — <c>operators.write</c></item>
+///   <item><c>PUT registry/operators/{subject}/roles/{role}</c> (202, an act to validate; 204 for the installation), <c>DELETE …</c> — <c>operators.write</c></item>
+///   <item><c>GET registry/validations</c> — <c>operators.read</c>; <c>POST registry/validations/{id}/validate</c>, <c>…/reject</c> — <c>validations.write</c>, never one's own act</item>
+///   <item><c>PUT registry/compartments/{compartment}/owner/rescue/{subject}</c> (202) — <c>ownership.rescue</c></item>
 /// </list>
 /// <para>
 /// A refusal of a service is answered as problem details with its code — <c>Role.Declared</c>, <c>Role.InUse</c>,
@@ -88,8 +90,41 @@ public static class RegistryAdminEndpoints
         MapRoles(group.MapGroup("/roles"));
         MapMemberships(group.MapGroup("/memberships"));
         MapOperators(group.MapGroup("/operators"));
+        MapValidations(group.MapGroup("/validations"));
         return group;
     }
+
+    private static void MapValidations(RouteGroupBuilder validations)
+    {
+        validations.MapGet("/", async (IValidations service, CancellationToken ct) =>
+                Results.Ok((await service.ListAsync(ct)).Select(PendingActSummary.Of).ToArray()))
+            .WithMetadata(RegistryOperations.OperatorsRead)
+            .Produces<PendingActSummary[]>(StatusCodes.Status200OK);
+
+        validations.MapPost("/{id:guid}/validate", async (Guid id, HttpContext http, IValidations service, ILoggerFactory loggers, CancellationToken ct) =>
+            {
+                Written(http, loggers, "validated act {Act}", id);
+                return (await service.ValidateAsync(id, Callers.ActorOf(http), ValidationChannel.Screen, ct)).ToHttpResult();
+            })
+            .WithMetadata(RegistryOperations.ValidationsWrite)
+            .Produces(StatusCodes.Status204NoContent)
+            .ProducesProblem(StatusCodes.Status403Forbidden)
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status412PreconditionFailed);
+
+        validations.MapPost("/{id:guid}/reject", async (Guid id, HttpContext http, IValidations service, ILoggerFactory loggers, CancellationToken ct) =>
+            {
+                Written(http, loggers, "rejected act {Act}", id);
+                return (await service.RejectAsync(id, Callers.ActorOf(http), ValidationChannel.Screen, ct)).ToHttpResult();
+            })
+            .WithMetadata(RegistryOperations.ValidationsWrite)
+            .Produces(StatusCodes.Status204NoContent)
+            .ProducesProblem(StatusCodes.Status403Forbidden)
+            .ProducesProblem(StatusCodes.Status404NotFound);
+    }
+
+    // An act proposed: it takes effect once validated by a second channel.
+    private static IResult Pending(PendingAct act) => Results.Accepted((string?)null, PendingActSummary.Of(act));
 
     private static void MapCompartments(RouteGroupBuilder compartments)
     {
@@ -156,6 +191,23 @@ public static class RegistryAdminEndpoints
             })
             .WithMetadata(RegistryOperations.CompartmentsWrite)
             .Produces(StatusCodes.Status204NoContent)
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status409Conflict);
+
+        compartments.MapPut("/{compartment}/owner/rescue/{subject}", async (string compartment, string subject, HttpContext http, IOwnership service, ILoggerFactory loggers, CancellationToken ct) =>
+            {
+                if (!Compartment.TryParse(compartment, out var parsed))
+                    return NotACompartment(compartment);
+                if (!RegistryRules.IsSubject(subject))
+                    return NotASubject(subject);
+                Written(http, loggers, "proposed the rescue of compartment {Compartment}", parsed);
+                var rescued = await service.RescueAsync(parsed, subject, Callers.ActorOf(http), ct);
+                if (rescued.IsFailure)
+                    return rescued.ToHttpResult();
+                return rescued.Value is { } pending ? Pending(pending) : Results.NoContent();
+            })
+            .WithMetadata(RegistryOperations.OwnershipRescue)
+            .Produces<PendingActSummary>(StatusCodes.Status202Accepted)
             .ProducesProblem(StatusCodes.Status404NotFound)
             .ProducesProblem(StatusCodes.Status409Conflict);
 
@@ -329,7 +381,9 @@ public static class RegistryAdminEndpoints
                     return invalid;
                 var created = await service.CreateAsync(request.Name, scope, definition, Callers.ActorOf(http), ct);
                 Written(http, loggers, "created role {Role}", request.Name);
-                return created.IsSuccess ? Results.Created((string?)null, RoleSummary.Of(created.Value)) : created.ToHttpResult();
+                if (created.IsFailure)
+                    return created.ToHttpResult();
+                return created.Value.Pending is { } pending ? Pending(pending) : Results.Created((string?)null, RoleSummary.Of(created.Value.Value!));
             })
             .WithMetadata(RegistryOperations.RolesWrite)
             .Produces<RoleSummary>(StatusCodes.Status201Created)
@@ -345,7 +399,10 @@ public static class RegistryAdminEndpoints
                 if (!TryDefine(request.Category, request.DisplayName, request.Operations, request.Assignable, request.RequiresSecondFactor, out var definition, out var invalid))
                     return invalid;
                 Written(http, loggers, "changed role {Role}", role);
-                return Summary(await service.UpdateAsync(role, definition, Callers.ActorOf(http), ct), RoleSummary.Of);
+                var updated = await service.UpdateAsync(role, definition, Callers.ActorOf(http), ct);
+                if (updated.IsFailure)
+                    return updated.ToHttpResult();
+                return updated.Value.Pending is { } pending ? Pending(pending) : Results.Ok(RoleSummary.Of(updated.Value.Value!));
             })
             .WithMetadata(RegistryOperations.RolesWrite)
             .Produces<RoleSummary>(StatusCodes.Status200OK)
@@ -462,10 +519,14 @@ public static class RegistryAdminEndpoints
                 if (!RegistryRules.IsRoleName(role))
                     return NotARole(role);
                 Written(http, loggers, "assigned platform role {Role} to {Subject}", role, subject);
-                return (await service.AssignAsync(subject, role, Callers.ActorOf(http), ct)).ToHttpResult();
+                var assigned = await service.AssignAsync(subject, role, Callers.ActorOf(http), ct);
+                if (assigned.IsFailure)
+                    return assigned.ToHttpResult();
+                return assigned.Value is { } pending ? Pending(pending) : Results.NoContent();
             })
             .WithMetadata(RegistryOperations.OperatorsWrite)
             .Produces(StatusCodes.Status204NoContent)
+            .Produces<PendingActSummary>(StatusCodes.Status202Accepted)
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status404NotFound)
             .ProducesProblem(StatusCodes.Status412PreconditionFailed);

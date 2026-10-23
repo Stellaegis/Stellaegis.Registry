@@ -72,11 +72,20 @@ public static class RegistryOperations
     /// </summary>
     public static readonly Operation OwnershipWrite = new("ownership", "write", OperationKind.Write);
 
+    /// <summary>
+    /// Validating or rejecting on screen an act waiting — the assignment of a platform role, the definition of a role, the
+    /// rescue of an ownership —, <c>validations.write</c>: never one's own.
+    /// </summary>
+    public static readonly Operation ValidationsWrite = new("validations", "write", OperationKind.Write);
+
+    /// <summary>Proposing the rescue of a compartment whose owner is unreachable, <c>ownership.rescue</c>: an act of the platform, validated by a second channel.</summary>
+    public static readonly Operation OwnershipRescue = new("ownership", "rescue", OperationKind.Write);
+
     /// <summary>Every operation of the module.</summary>
     public static IReadOnlyList<Operation> All { get; } =
     [
         CompartmentsRead, CompartmentsWrite, DirectoryRead, DirectoryWrite, CatalogRead,
-        RolesRead, RolesWrite, MembershipsRead, MembershipsWrite, OperatorsRead, OperatorsWrite, OwnershipWrite, InvitationsWrite,
+        RolesRead, RolesWrite, MembershipsRead, MembershipsWrite, OperatorsRead, OperatorsWrite, OwnershipWrite, InvitationsWrite, ValidationsWrite, OwnershipRescue,
     ];
 }
 

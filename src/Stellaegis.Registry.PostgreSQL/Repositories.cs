@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Data.Common;
 using Dapper;
 using Stellaegis.Primitives;
@@ -212,6 +213,23 @@ internal sealed class CompartmentRepository(DbConnection connection, Func<DbTran
                 new { compartment = transfer.Compartment.Value, roles = transfer.Kept.Distinct(StringComparer.Ordinal).ToArray() },
                 transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false);
     }
+
+    /// <summary>Seats <paramref name="owner"/> whoever owns the compartment now, in the transaction of the caller; the former owner, or <see langword="null"/>.</summary>
+    public async Task<string?> ReplaceOwnerAnyAsync(string compartment, string owner, CancellationToken cancellationToken)
+    {
+        var previous = await connection.QuerySingleOrDefaultAsync<string?>(new CommandDefinition(
+            "select owner_subject from reg.compartments where compartment = @compartment for update",
+            new { compartment }, transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false);
+        await connection.ExecuteAsync(new CommandDefinition(
+            "update reg.compartments set owner_subject = @owner where compartment = @compartment",
+            new { compartment, owner }, transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false);
+        return previous;
+    }
+
+    public Task<bool> ExistsAsync(string compartment, CancellationToken cancellationToken)
+        => connection.ExecuteScalarAsync<bool>(new CommandDefinition(
+            "select exists (select 1 from reg.compartments where compartment = @compartment)",
+            new { compartment }, transaction(), cancellationToken: cancellationToken));
 
     public Task DeleteTransferAsync(string compartment, CancellationToken cancellationToken)
         => connection.ExecuteAsync(new CommandDefinition(
@@ -608,6 +626,94 @@ internal sealed class InvitationRepository(DbConnection connection, Func<DbTrans
         => connection.ExecuteAsync(new CommandDefinition(
             "delete from reg.invitations where accepted_at is null and (expires_at < @before or revoked_at < @before)",
             new { before = Names.Utc(before) }, transaction(), cancellationToken: cancellationToken));
+
+    private static DateTimeOffset Utc(DateTime value) => new(DateTime.SpecifyKind(value, DateTimeKind.Utc));
+}
+
+/// <summary>The rows of <c>reg.pending_acts</c>.</summary>
+internal sealed class PendingActRepository(DbConnection connection, Func<DbTransaction?> transaction)
+{
+    private sealed record Row(
+        Guid ActId, string Kind, string? Subject, string? Role, string? Compartment, string? Definition, DateTime ProposedAt, string ProposedBy,
+        DateTime ExpiresAt, DateTime? ValidatedAt, string? ValidatedBy, DateTime? RejectedAt, string? RejectedBy);
+
+    // The definition as JSON, in the names of the routes.
+    private sealed record DefinitionJson(string Scope, string Category, string DisplayName, string[] Operations, string AssignsCompartment, bool AssignsPlatform, string[] AssignableRoles, bool RequiresSecondFactor);
+
+    private const string Select = """
+        select act_id as ActId, kind as Kind, subject as Subject, role as Role, compartment as Compartment, definition::text as Definition,
+               proposed_at as ProposedAt, proposed_by as ProposedBy, expires_at as ExpiresAt, validated_at as ValidatedAt,
+               validated_by as ValidatedBy, rejected_at as RejectedAt, rejected_by as RejectedBy
+        from reg.pending_acts
+        """;
+
+    public async Task<IReadOnlyList<PendingAct>> ListAsync(Guid? actId, CancellationToken cancellationToken)
+    {
+        var rows = await connection.QueryAsync<Row>(new CommandDefinition(
+            $"{Select} where (@actId::uuid is null or act_id = @actId) order by proposed_at desc, act_id",
+            new { actId }, transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false);
+        return rows.Select(ToAct).ToList();
+    }
+
+    public Task InsertAsync(PendingAct act, CancellationToken cancellationToken)
+        => connection.ExecuteAsync(new CommandDefinition(
+            """
+            insert into reg.pending_acts (act_id, kind, subject, role, compartment, definition, proposed_at, proposed_by, expires_at)
+            values (@id, @kind, @subject, @role, @compartment, @definition::jsonb, @proposedAt, @proposedBy, @expiresAt)
+            """,
+            new
+            {
+                id = act.ActId,
+                kind = KindOf(act.Kind),
+                subject = act.Subject,
+                role = act.Role,
+                compartment = act.Compartment?.Value,
+                definition = act.Definition is { } definition ? JsonSerializer.Serialize(ToJson(act.Scope!.Value, definition)) : null,
+                proposedAt = Names.Utc(act.Proposed.At),
+                proposedBy = act.Proposed.By.Value,
+                expiresAt = Names.Utc(act.ExpiresAt),
+            }, transaction(), cancellationToken: cancellationToken));
+
+    public async Task<bool> CloseAsync(Guid id, bool validated, Stamp closed, CancellationToken cancellationToken)
+        => await connection.ExecuteAsync(new CommandDefinition(
+            validated
+                ? "update reg.pending_acts set validated_at = @at, validated_by = @by where act_id = @id and validated_at is null and rejected_at is null"
+                : "update reg.pending_acts set rejected_at = @at, rejected_by = @by where act_id = @id and validated_at is null and rejected_at is null",
+            new { id, at = Names.Utc(closed.At), by = closed.By.Value }, transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false) == 1;
+
+    private static string KindOf(PendingActKind kind) => kind switch
+    {
+        PendingActKind.PlatformRole => "platform_role",
+        PendingActKind.RoleDefinition => "role_definition",
+        PendingActKind.OwnershipRescue => "ownership_rescue",
+        _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unknown act."),
+    };
+
+    private static PendingAct ToAct(Row row)
+    {
+        var kind = row.Kind switch
+        {
+            "platform_role" => PendingActKind.PlatformRole,
+            "role_definition" => PendingActKind.RoleDefinition,
+            "ownership_rescue" => PendingActKind.OwnershipRescue,
+            _ => throw new InvalidOperationException($"reg.pending_acts holds the kind '{row.Kind}', which this package does not know."),
+        };
+        var json = row.Definition is null ? null : JsonSerializer.Deserialize<DefinitionJson>(row.Definition);
+        return new PendingAct(row.ActId, kind, row.Subject, row.Role, row.Compartment is null ? null : Compartment.Parse(row.Compartment),
+            json is null ? null : Names.ScopeOf(json.Scope),
+            json is null ? null : new RoleDefinition(Names.CategoryOf(json.Category), json.DisplayName, json.Operations,
+                new AssignableRoles(Names.SelectorOf(json.AssignsCompartment), json.AssignsPlatform, json.AssignableRoles), json.RequiresSecondFactor),
+            new Stamp(Utc(row.ProposedAt), Actor.Parse(row.ProposedBy)), Utc(row.ExpiresAt),
+            row.ValidatedAt is { } validated ? new Stamp(Utc(validated), Actor.Parse(row.ValidatedBy!)) : null,
+            row.RejectedAt is { } rejected ? new Stamp(Utc(rejected), Actor.Parse(row.RejectedBy!)) : null);
+    }
+
+    private static DefinitionJson ToJson(RoleScope scope, RoleDefinition definition)
+    {
+        var assignable = definition.Assignable ?? Stellaegis.Registry.AssignableRoles.None;
+        return new DefinitionJson(Names.Of(scope), Names.Of(definition.Category), definition.DisplayName, definition.Operations.ToArray(),
+            Names.Of(assignable.Compartment), assignable.AllPlatform, assignable.Roles.ToArray(), definition.RequiresSecondFactor);
+    }
 
     private static DateTimeOffset Utc(DateTime value) => new(DateTime.SpecifyKind(value, DateTimeKind.Utc));
 }

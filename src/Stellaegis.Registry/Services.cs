@@ -34,11 +34,17 @@ public interface IRoles
     /// </summary>
     Task<Result> DeclareAsync(IEnumerable<RoleDeclaration> declarations, Actor actor, CancellationToken cancellationToken = default);
 
-    /// <summary>Creates a role by hand.</summary>
-    Task<Result<Role>> CreateAsync(string name, RoleScope scope, RoleDefinition definition, Actor actor, CancellationToken cancellationToken = default);
+    /// <summary>
+    /// Creates a role by hand: applied at once by the installation, proposed for a validation otherwise
+    /// (<see cref="IValidations"/>) — the definition of a role is the most sensitive act of the model.
+    /// </summary>
+    Task<Result<ActOutcome<Role>>> CreateAsync(string name, RoleScope scope, RoleDefinition definition, Actor actor, CancellationToken cancellationToken = default);
 
-    /// <summary>Changes the definition of a role; every holder has their rights recomputed. The installation resets a declared role.</summary>
-    Task<Result<Role>> UpdateAsync(string name, RoleDefinition definition, Actor actor, CancellationToken cancellationToken = default);
+    /// <summary>
+    /// Changes the definition of a role; every holder has their rights recomputed. Applied at once by the installation,
+    /// which resets a declared role, or when only the display name changes; proposed for a validation otherwise.
+    /// </summary>
+    Task<Result<ActOutcome<Role>>> UpdateAsync(string name, RoleDefinition definition, Actor actor, CancellationToken cancellationToken = default);
 
     /// <summary>Deletes a role created by hand that nobody holds and no assignable list names.</summary>
     Task<Result> DeleteAsync(string name, Actor actor, CancellationToken cancellationToken = default);
@@ -140,9 +146,13 @@ public interface IOperators
     /// (<see cref="RegistryErrors.RoleNotAssignable"/>), and the user is not the actor (<see cref="RegistryErrors.OwnRoles"/>).
     /// A job — the installation — is bounded by neither.
     /// </summary>
-    Task<Result> AssignAsync(string subject, string role, Actor actor, CancellationToken cancellationToken = default);
+    /// <remarks>
+    /// Applied at once by the installation; proposed for a validation otherwise (<see cref="IValidations"/>): the answer
+    /// is then the act waiting, and the role takes effect once a second channel validated it.
+    /// </remarks>
+    Task<Result<PendingAct?>> AssignAsync(string subject, string role, Actor actor, CancellationToken cancellationToken = default);
 
-    /// <summary>Unassigns a platform role from a user, under the same rules as its assignment.</summary>
+    /// <summary>Unassigns a platform role from a user, under the same rules as its assignment; at once, since it takes rights away.</summary>
     Task<Result> UnassignAsync(string subject, string role, Actor actor, CancellationToken cancellationToken = default);
 
     /// <summary>The platform roles of the user.</summary>
@@ -174,6 +184,7 @@ internal sealed class Roles(
     ICatalogStore catalog,
     IMembershipStore memberships,
     IOperatorStore operators,
+    ActProposals proposals,
     RightsProjector projector,
     IEventPublisher publisher,
     TimeProvider time) : IRoles
@@ -230,48 +241,89 @@ internal sealed class Roles(
         return Result.Success();
     }
 
-    public async Task<Result<Role>> CreateAsync(string name, RoleScope scope, RoleDefinition definition, Actor actor, CancellationToken cancellationToken = default)
+    public async Task<Result<ActOutcome<Role>>> CreateAsync(string name, RoleScope scope, RoleDefinition definition, Actor actor, CancellationToken cancellationToken = default)
     {
         Guard.NotNull(definition);
         Guard.NotNull(actor);
         if (!RegistryRules.IsRoleName(name))
-            return Result.Failure<Role>(RegistryErrors.RoleNameInvalid(name));
+            return Result.Failure<ActOutcome<Role>>(RegistryErrors.RoleNameInvalid(name));
         if (name == RegistryRoles.Owner)
-            return Result.Failure<Role>(RegistryErrors.RoleReserved(name));
+            return Result.Failure<ActOutcome<Role>>(RegistryErrors.RoleReserved(name));
         if (await store.GetAsync(name, cancellationToken).ConfigureAwait(false) is not null)
-            return Result.Failure<Role>(RegistryErrors.RoleExists(name));
+            return Result.Failure<ActOutcome<Role>>(RegistryErrors.RoleExists(name));
         definition = Normalize(name, scope, definition);
         var invalid = await ValidateAsync(name, scope, definition, null, cancellationToken).ConfigureAwait(false);
         if (invalid is not null)
-            return Result.Failure<Role>(invalid);
+            return Result.Failure<ActOutcome<Role>>(invalid);
 
+        if (!AssignmentRules.IsJob(actor))
+            return await ProposeAsync(name, scope, definition, actor, cancellationToken).ConfigureAwait(false);
         var now = time.GetUtcNow();
         var role = Build(name, scope, definition, declared: false, Audit.CreatedBy(actor, now));
         await store.SaveAsync(role, cancellationToken).ConfigureAwait(false);
         await publisher.PublishAsync(new RoleChangedEvent { OccurredAt = now, Role = name, Exists = true, By = actor }, cancellationToken).ConfigureAwait(false);
-        return Result.Success(role);
+        return Result.Success(new ActOutcome<Role>(role, null));
     }
 
-    public async Task<Result<Role>> UpdateAsync(string name, RoleDefinition definition, Actor actor, CancellationToken cancellationToken = default)
+    public async Task<Result<ActOutcome<Role>>> UpdateAsync(string name, RoleDefinition definition, Actor actor, CancellationToken cancellationToken = default)
     {
         Guard.NotNull(definition);
         Guard.NotNull(actor);
         var existing = await store.GetAsync(name, cancellationToken).ConfigureAwait(false);
         if (existing is null)
-            return Result.Failure<Role>(RegistryErrors.RoleNotFound(name));
+            return Result.Failure<ActOutcome<Role>>(RegistryErrors.RoleNotFound(name));
         if (await HeldByAsync(existing, actor, cancellationToken).ConfigureAwait(false))
-            return Result.Failure<Role>(RegistryErrors.RoleHeldByAuthor(name));
+            return Result.Failure<ActOutcome<Role>>(RegistryErrors.RoleHeldByAuthor(name));
         definition = Normalize(name, existing.Scope, definition);
         var invalid = await ValidateAsync(name, existing.Scope, definition, null, cancellationToken).ConfigureAwait(false);
         if (invalid is not null)
-            return Result.Failure<Role>(invalid);
+            return Result.Failure<ActOutcome<Role>>(invalid);
 
+        // The display name gives nothing: it changes at once.
+        if (!AssignmentRules.IsJob(actor) && !Same(existing, definition with { DisplayName = existing.DisplayName }))
+            return await ProposeAsync(name, existing.Scope, definition, actor, cancellationToken).ConfigureAwait(false);
+        return Result.Success(new ActOutcome<Role>(await SaveAsync(existing, definition, actor, cancellationToken).ConfigureAwait(false), null));
+    }
+
+    /// <summary>
+    /// Applies a definition validated: creates the role, or changes it — everything checked again, the name still free
+    /// for a creation, the role still there for a change. Its author is the one who proposed it.
+    /// </summary>
+    internal async Task<Result> ApplyAsync(string name, RoleScope scope, RoleDefinition definition, Actor proposer, CancellationToken cancellationToken)
+    {
+        var existing = await store.GetAsync(name, cancellationToken).ConfigureAwait(false);
+        if (existing is not null && existing.Scope != scope)
+            return Result.Failure(RegistryErrors.RoleExists(name));
+        var invalid = await ValidateAsync(name, scope, definition, null, cancellationToken).ConfigureAwait(false);
+        if (invalid is not null)
+            return Result.Failure(invalid);
+        if (existing is null)
+        {
+            var now = time.GetUtcNow();
+            await store.SaveAsync(Build(name, scope, definition, declared: false, Audit.CreatedBy(proposer, now)), cancellationToken).ConfigureAwait(false);
+            await publisher.PublishAsync(new RoleChangedEvent { OccurredAt = now, Role = name, Exists = true, By = proposer }, cancellationToken).ConfigureAwait(false);
+            return Result.Success();
+        }
+        await SaveAsync(existing, definition, proposer, cancellationToken).ConfigureAwait(false);
+        return Result.Success();
+    }
+
+    private async Task<Role> SaveAsync(Role existing, RoleDefinition definition, Actor actor, CancellationToken cancellationToken)
+    {
         var now = time.GetUtcNow();
-        var role = Build(name, existing.Scope, definition, existing.Declared, existing.Audit.ModifiedBy(actor, now));
+        var role = Build(existing.Name, existing.Scope, definition, existing.Declared, existing.Audit.ModifiedBy(actor, now));
         await store.SaveAsync(role, cancellationToken).ConfigureAwait(false);
-        await publisher.PublishAsync(new RoleChangedEvent { OccurredAt = now, Role = name, Exists = true, By = actor }, cancellationToken).ConfigureAwait(false);
+        await publisher.PublishAsync(new RoleChangedEvent { OccurredAt = now, Role = role.Name, Exists = true, By = actor }, cancellationToken).ConfigureAwait(false);
         await projector.ProjectRoleHoldersAsync(role, cancellationToken).ConfigureAwait(false);
-        return Result.Success(role);
+        return role;
+    }
+
+    private async Task<Result<ActOutcome<Role>>> ProposeAsync(string name, RoleScope scope, RoleDefinition definition, Actor actor, CancellationToken cancellationToken)
+    {
+        var proposed = await proposals.ProposeAsync(PendingActKind.RoleDefinition, null, name, null, scope, definition, actor, cancellationToken).ConfigureAwait(false);
+        return proposed.IsSuccess
+            ? Result.Success(new ActOutcome<Role>(null, proposed.Value))
+            : Result.Failure<ActOutcome<Role>>(proposed.Error!);
     }
 
     public async Task<Result> DeleteAsync(string name, Actor actor, CancellationToken cancellationToken = default)
@@ -368,7 +420,7 @@ internal sealed class Roles(
 
     // Whether the actor is a person who holds the role: on the platform for a platform role, in any compartment for a
     // compartment role. A job — the installation — holds nothing.
-    private async Task<bool> HeldByAsync(Role role, Actor actor, CancellationToken cancellationToken)
+    internal async Task<bool> HeldByAsync(Role role, Actor actor, CancellationToken cancellationToken)
     {
         if (!RegistryRules.IsSubject(actor.Value))
             return false;
@@ -684,13 +736,50 @@ internal sealed class Operators(
     IUserStore users,
     IRoleStore roles,
     AssignmentRules rules,
+    ActProposals proposals,
     RightsProjector projector,
     TimeProvider time) : IOperators
 {
-    public async Task<Result> AssignAsync(string subject, string role, Actor actor, CancellationToken cancellationToken = default)
+    public async Task<Result<PendingAct?>> AssignAsync(string subject, string role, Actor actor, CancellationToken cancellationToken = default)
     {
         subject = RegistryRules.NormalizeSubject(subject);
         Guard.NotNull(actor);
+        var assignable = await AssignableAsync(subject, role, cancellationToken).ConfigureAwait(false);
+        if (assignable.IsFailure)
+            return Result.Failure<PendingAct?>(assignable.Error!);
+        var refused = await rules.CheckAsync(actor, subject, compartment: null, [role], cancellationToken).ConfigureAwait(false);
+        if (refused is not null)
+            return Result.Failure<PendingAct?>(refused);
+        if (await store.ListRolesAsync(subject, cancellationToken).ConfigureAwait(false) is var held && held.Contains(role, StringComparer.Ordinal))
+            return Result.Success<PendingAct?>(null);
+
+        if (!AssignmentRules.IsJob(actor))
+        {
+            var proposed = await proposals.ProposeAsync(PendingActKind.PlatformRole, subject, role, null, null, null, actor, cancellationToken).ConfigureAwait(false);
+            return proposed.IsSuccess ? Result.Success<PendingAct?>(proposed.Value) : Result.Failure<PendingAct?>(proposed.Error!);
+        }
+        await AssignNowAsync(subject, role, actor, cancellationToken).ConfigureAwait(false);
+        return Result.Success<PendingAct?>(null);
+    }
+
+    /// <summary>Applies an assignment validated, checked again: the user still active, the role still a platform role. Its grantor is the one who proposed it.</summary>
+    internal async Task<Result> ApplyAsync(string subject, string role, Actor proposer, CancellationToken cancellationToken)
+    {
+        var assignable = await AssignableAsync(subject, role, cancellationToken).ConfigureAwait(false);
+        if (assignable.IsFailure)
+            return assignable;
+        await AssignNowAsync(subject, role, proposer, cancellationToken).ConfigureAwait(false);
+        return Result.Success();
+    }
+
+    private async Task AssignNowAsync(string subject, string role, Actor grantor, CancellationToken cancellationToken)
+    {
+        await store.AssignAsync(subject, role, new Stamp(time.GetUtcNow(), grantor), cancellationToken).ConfigureAwait(false);
+        await projector.ProjectAdminGrantsAsync(subject, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<Result> AssignableAsync(string subject, string role, CancellationToken cancellationToken)
+    {
         var user = await users.GetAsync(subject, cancellationToken).ConfigureAwait(false);
         if (user is null)
             return Result.Failure(RegistryErrors.UserNotFound(subject));
@@ -699,15 +788,7 @@ internal sealed class Operators(
         var record = await roles.GetAsync(Guard.NotWhiteSpace(role), cancellationToken).ConfigureAwait(false);
         if (record is null)
             return Result.Failure(RegistryErrors.RoleNotFound(role));
-        if (record.Scope != RoleScope.Platform)
-            return Result.Failure(RegistryErrors.RoleScopeMismatch(role, RoleScope.Platform));
-        var refused = await rules.CheckAsync(actor, subject, compartment: null, [role], cancellationToken).ConfigureAwait(false);
-        if (refused is not null)
-            return Result.Failure(refused);
-
-        await store.AssignAsync(subject, role, new Stamp(time.GetUtcNow(), actor), cancellationToken).ConfigureAwait(false);
-        await projector.ProjectAdminGrantsAsync(subject, cancellationToken).ConfigureAwait(false);
-        return Result.Success();
+        return record.Scope != RoleScope.Platform ? Result.Failure(RegistryErrors.RoleScopeMismatch(role, RoleScope.Platform)) : Result.Success();
     }
 
     public async Task<Result> UnassignAsync(string subject, string role, Actor actor, CancellationToken cancellationToken = default)
@@ -886,6 +967,14 @@ public interface IOwnership
 
     /// <summary>The transfer waiting for the compartment, or a failure.</summary>
     Task<Result<OwnershipTransfer>> GetTransferAsync(Compartment compartment, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// The rescue of a compartment whose owner is unreachable, gone or dead (P5): another active user becomes its owner —
+    /// a member if not one yet —, the former owner loses the role of the owner and keeps their other roles, a transfer
+    /// waiting is cancelled. An act of the platform, proposed for a validation by a second channel; nobody rescues a
+    /// compartment for themselves.
+    /// </summary>
+    Task<Result<PendingAct?>> RescueAsync(Compartment compartment, string owner, Actor actor, CancellationToken cancellationToken = default);
 }
 
 internal sealed class Ownership(
@@ -893,6 +982,7 @@ internal sealed class Ownership(
     IUserStore users,
     IMembershipStore memberships,
     IRoleStore roles,
+    ActProposals proposals,
     RightsProjector projector,
     IEventPublisher publisher,
     TimeProvider time) : IOwnership
@@ -1001,6 +1091,55 @@ internal sealed class Ownership(
         => await store.GetTransferAsync(Guard.NotNull(compartment), cancellationToken).ConfigureAwait(false) is { } transfer
             ? Result.Success(transfer)
             : Result.Failure<OwnershipTransfer>(RegistryErrors.TransferNotFound(compartment));
+
+    public async Task<Result<PendingAct?>> RescueAsync(Compartment compartment, string owner, Actor actor, CancellationToken cancellationToken = default)
+    {
+        Guard.NotNull(compartment);
+        owner = RegistryRules.NormalizeSubject(owner);
+        var rescuable = await RescuableAsync(compartment, owner, actor, cancellationToken).ConfigureAwait(false);
+        if (rescuable.IsFailure)
+            return Result.Failure<PendingAct?>(rescuable.Error!);
+        if (!AssignmentRules.IsJob(actor))
+        {
+            var proposed = await proposals.ProposeAsync(PendingActKind.OwnershipRescue, owner, null, compartment, null, null, actor, cancellationToken).ConfigureAwait(false);
+            return proposed.IsSuccess ? Result.Success<PendingAct?>(proposed.Value) : Result.Failure<PendingAct?>(proposed.Error!);
+        }
+        var applied = await ApplyRescueAsync(compartment, owner, actor, cancellationToken).ConfigureAwait(false);
+        return applied.IsSuccess ? Result.Success<PendingAct?>(null) : Result.Failure<PendingAct?>(applied.Error!);
+    }
+
+    /// <summary>Applies a rescue validated, checked again; its grantor is the one who proposed it.</summary>
+    internal async Task<Result> ApplyRescueAsync(Compartment compartment, string owner, Actor proposer, CancellationToken cancellationToken)
+    {
+        var rescuable = await RescuableAsync(compartment, owner, proposer, cancellationToken).ConfigureAwait(false);
+        if (rescuable.IsFailure)
+            return rescuable;
+        var previous = (await store.GetAsync(compartment, cancellationToken).ConfigureAwait(false))?.Owner;
+        await EnsureOwnerRoleAsync(proposer, cancellationToken).ConfigureAwait(false);
+        var now = time.GetUtcNow();
+        if (!await store.RescueOwnershipAsync(compartment, owner, new Stamp(now, proposer), cancellationToken).ConfigureAwait(false))
+            return Result.Failure(RegistryErrors.CompartmentNotFound(compartment));
+        await projector.ProjectMembershipsAsync(owner, cancellationToken).ConfigureAwait(false);
+        await projector.ProjectUserGrantsAsync(owner, compartment, cancellationToken).ConfigureAwait(false);
+        if (previous is not null && previous != owner)
+            await projector.ProjectUserGrantsAsync(previous, compartment, cancellationToken).ConfigureAwait(false);
+        await publisher.PublishAsync(new OwnershipChangedEvent { OccurredAt = now, Compartment = compartment, Owner = owner, Previous = previous, By = proposer }, cancellationToken).ConfigureAwait(false);
+        return Result.Success();
+    }
+
+    // A compartment not terminated, an active user who is not its owner already, never the actor themselves.
+    private async Task<Result> RescuableAsync(Compartment compartment, string owner, Actor actor, CancellationToken cancellationToken)
+    {
+        var seatable = await CheckSeatableAsync(owner, actor, cancellationToken).ConfigureAwait(false);
+        if (seatable is not null)
+            return Result.Failure(seatable);
+        var record = await store.GetAsync(compartment, cancellationToken).ConfigureAwait(false);
+        if (record is null)
+            return Result.Failure(RegistryErrors.CompartmentNotFound(compartment));
+        if (record.Status == CompartmentStatus.Terminated)
+            return Result.Failure(RegistryErrors.CompartmentTerminated(compartment));
+        return record.Owner == owner ? Result.Failure(RegistryErrors.OwnerSeated(compartment)) : Result.Success();
+    }
 
     /// <summary>The refusal when <paramref name="owner"/> cannot be seated by <paramref name="actor"/>: an active user, never by themselves.</summary>
     internal async Task<Error?> CheckSeatableAsync(string owner, Actor actor, CancellationToken cancellationToken)

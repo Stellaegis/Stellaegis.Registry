@@ -37,6 +37,31 @@ public sealed record TransferSummary(string Compartment, string From, string To,
         => new(transfer.Compartment.Value, transfer.From, transfer.To, transfer.Kept.ToArray(), transfer.Proposed.At, transfer.ExpiresAt);
 }
 
+/// <summary>An act waiting for its validation, or closed, as the routes answer it.</summary>
+/// <param name="ActId">Its identity, to validate or reject it by.</param>
+/// <param name="Kind"><c>platform_role</c>, <c>role_definition</c> or <c>ownership_rescue</c>.</param>
+/// <param name="Subject">The user it concerns, or <see langword="null"/>.</param>
+/// <param name="Role">The role it assigns or defines, or <see langword="null"/>.</param>
+/// <param name="Compartment">The compartment it rescues, or <see langword="null"/>.</param>
+/// <param name="ProposedAt">When it was proposed.</param>
+/// <param name="ProposedBy">Its author.</param>
+/// <param name="ExpiresAt">When it lapses, unvalidated.</param>
+/// <param name="ValidatedBy">Who validated it, or <see langword="null"/>.</param>
+/// <param name="RejectedBy">Who rejected it, or <see langword="null"/>.</param>
+public sealed record PendingActSummary(
+    Guid ActId, string Kind, string? Subject, string? Role, string? Compartment, DateTimeOffset ProposedAt, string ProposedBy,
+    DateTimeOffset ExpiresAt, string? ValidatedBy, string? RejectedBy)
+{
+    internal static PendingActSummary Of(PendingAct act)
+        => new(act.ActId, act.Kind switch
+            {
+                PendingActKind.PlatformRole => "platform_role",
+                PendingActKind.RoleDefinition => "role_definition",
+                _ => "ownership_rescue",
+            }, act.Subject, act.Role, act.Compartment?.Value, act.Proposed.At, act.Proposed.By.Value, act.ExpiresAt,
+            act.Validated?.By.Value, act.Rejected?.By.Value);
+}
+
 /// <summary>The body of a proposal of transfer.</summary>
 /// <param name="To">The subject of the member who would become the owner.</param>
 /// <param name="Keep">The roles the outgoing owner keeps; every role they hold when absent.</param>

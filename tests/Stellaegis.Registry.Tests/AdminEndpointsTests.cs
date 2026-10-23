@@ -33,6 +33,16 @@ public sealed class AdminEndpointsTests
         return app;
     }
 
+    /// <summary>The act the route proposed, validated at the console as the validate verb of the host would.</summary>
+    private static async Task ValidatedAsync(WebApplication app, HttpResponseMessage response)
+    {
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        var act = (await response.Content.ReadFromJsonAsync<PendingActSummary>(Ct))!;
+        using var scope = app.Services.CreateScope();
+        var validated = await scope.ServiceProvider.GetRequiredService<IValidations>().ValidateAsync(act.ActId, Actor.Parse(@"system:SATURN-fred"), ValidationChannel.Console, Ct);
+        Assert.True(validated.IsSuccess, validated.Error?.ToString());
+    }
+
     private static void MapPerOperation(WebApplication app)
         => app.MapGroup("/api/admin").MapRegistryAdminEndpoints().RequireAuthorizationPerOperation(operation => operation.ToString());
 
@@ -124,9 +134,9 @@ public sealed class AdminEndpointsTests
         Assert.True(superAdmin.Declared);
         Assert.Equal(HttpStatusCode.BadRequest, (await client.GetAsync("/api/admin/registry/roles?scope=nowhere", Ct)).StatusCode);
 
-        var created = await client.PostAsJsonAsync("/api/admin/registry/roles", new CreateRoleRequest("picker", "compartment", "business", "Picker", [ItemsRead.Identity, ItemsWrite.Identity]), Ct);
-        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
-        var picker = (await created.Content.ReadFromJsonAsync<RoleSummary>(Ct))!;
+        // The definition of a role is an act to validate: the route answers it waits, the console validates it.
+        await ValidatedAsync(app, await client.PostAsJsonAsync("/api/admin/registry/roles", new CreateRoleRequest("picker", "compartment", "business", "Picker", [ItemsRead.Identity, ItemsWrite.Identity]), Ct));
+        var picker = (await client.GetFromJsonAsync<RoleSummary>("/api/admin/registry/roles/picker", Ct))!;
         Assert.False(picker.Declared);
         Assert.Equal("compartment", picker.Scope);
 
@@ -135,18 +145,19 @@ public sealed class AdminEndpointsTests
         Assert.Equal(RegistryErrors.UnknownOperationCode, await unknownOperation.CodeOfAsync(Ct));
         Assert.Equal(HttpStatusCode.BadRequest, (await client.PostAsJsonAsync("/api/admin/registry/roles", new CreateRoleRequest("Bad-Name", "compartment", "business", "Bad", []), Ct)).StatusCode);
 
-        var updated = await client.PutAsJsonAsync("/api/admin/registry/roles/picker", new UpdateRoleRequest("business", "Order picker", [ItemsRead.Identity]), Ct);
-        Assert.Equal(HttpStatusCode.OK, updated.StatusCode);
+        await ValidatedAsync(app, await client.PutAsJsonAsync("/api/admin/registry/roles/picker", new UpdateRoleRequest("business", "Picker", [ItemsRead.Identity]), Ct));
+        var renamed = await client.PutAsJsonAsync("/api/admin/registry/roles/picker", new UpdateRoleRequest("business", "Order picker", [ItemsRead.Identity]), Ct);
+        Assert.Equal(HttpStatusCode.OK, renamed.StatusCode);                                   // a display name gives nothing: at once
         Assert.Equal([ItemsRead.Identity], (await client.GetFromJsonAsync<RoleSummary>("/api/admin/registry/roles/picker", Ct))!.Operations);
 
         // The category, the assignable list and the second factor go through the routes; a platform role always requires one.
-        var manager = await client.PostAsJsonAsync("/api/admin/registry/roles",
-            new CreateRoleRequest("pick_manager", "compartment", "administration", "Picking manager", [], new AssignableRolesBody("business", false, ["picker"]), RequiresSecondFactor: true), Ct);
-        Assert.Equal(HttpStatusCode.Created, manager.StatusCode);
-        var managed = (await manager.Content.ReadFromJsonAsync<RoleSummary>(Ct))!;
+        await ValidatedAsync(app, await client.PostAsJsonAsync("/api/admin/registry/roles",
+            new CreateRoleRequest("pick_manager", "compartment", "administration", "Picking manager", [], new AssignableRolesBody("business", false, ["picker"]), RequiresSecondFactor: true), Ct));
+        var managed = (await client.GetFromJsonAsync<RoleSummary>("/api/admin/registry/roles/pick_manager", Ct))!;
         Assert.Equal(("administration", "business", false, true), (managed.Category, managed.Assignable.Compartment, managed.Assignable.Platform, managed.RequiresSecondFactor));
         Assert.Equal(["picker"], managed.Assignable.Roles);
-        var ops = (await (await client.PostAsJsonAsync("/api/admin/registry/roles", new CreateRoleRequest("ops", "platform", "administration", "Operations", []), Ct)).Content.ReadFromJsonAsync<RoleSummary>(Ct))!;
+        await ValidatedAsync(app, await client.PostAsJsonAsync("/api/admin/registry/roles", new CreateRoleRequest("ops", "platform", "administration", "Operations", []), Ct));
+        var ops = (await client.GetFromJsonAsync<RoleSummary>("/api/admin/registry/roles/ops", Ct))!;
         Assert.True(ops.RequiresSecondFactor);
         Assert.Equal(HttpStatusCode.BadRequest, (await client.PostAsJsonAsync("/api/admin/registry/roles", new CreateRoleRequest("odd", "compartment", "boss", "Odd", []), Ct)).StatusCode);
         Assert.Equal(HttpStatusCode.BadRequest, (await client.PostAsJsonAsync("/api/admin/registry/roles", new CreateRoleRequest("odd", "compartment", "business", "Odd", [], new AssignableRolesBody("some", false, [])), Ct)).StatusCode);
@@ -205,7 +216,10 @@ public sealed class AdminEndpointsTests
         Assert.Equal(HttpStatusCode.NoContent, (await client.DeleteAsync($"/api/admin/registry/memberships/acme/{Jane}", Ct)).StatusCode);
         Assert.Empty(sink.Last(RightsSinkCallKind.ReplaceMemberships)!.Values);
 
-        Assert.Equal(HttpStatusCode.NoContent, (await client.PutAsync($"/api/admin/registry/operators/{Jane}/roles/super_admin", null, Ct)).StatusCode);
+        // A platform role is an act to validate: nothing is granted before the console validates it.
+        var waiting = await client.PutAsync($"/api/admin/registry/operators/{Jane}/roles/super_admin", null, Ct);
+        Assert.Empty((await client.GetFromJsonAsync<OperatorSummary>($"/api/admin/registry/operators/{Jane}", Ct))!.Roles);
+        await ValidatedAsync(app, waiting);
         Assert.Equal([RegistryOperations.CompartmentsWrite.Identity, ItemsPurge.Identity], sink.Last(RightsSinkCallKind.ReplaceAdminGrants)!.Values.Order());
         var operators = await client.GetFromJsonAsync<OperatorSummary[]>("/api/admin/registry/operators", Ct);
         Assert.Equal(["super_admin"], operators!.Single(entry => entry.Subject == Jane).Roles);
@@ -326,5 +340,36 @@ public sealed class AdminEndpointsTests
 
         var refused = await Assert.ThrowsAsync<InvalidOperationException>(() => StartAsync(app => app.MapGroup("/api/admin").MapRegistryInvitationEndpoints()));
         Assert.Contains("IInvitationSender", refused.Message);
+    }
+
+    [Fact]
+    public async Task An_act_is_validated_on_screen_by_another_operator_and_a_rescue_waits_for_it()
+    {
+        await using var app = await StartAsync(MapPerOperation);
+        using (var scope = app.Services.CreateScope())
+        {
+            var services = scope.ServiceProvider;
+            Assert.True((await services.GetRequiredService<IRoles>().CreateAsync("validator", RoleScope.Platform, new RoleDefinition(RoleCategory.Administration, "Validator",
+                [RegistryOperations.ValidationsWrite.Identity], AssignableRoles.Every(CompartmentRoleSelector.All, allPlatform: true)), By, Ct)).IsSuccess);
+            Assert.True((await services.GetRequiredService<IOperators>().AssignAsync(John, "super_admin", By, Ct)).IsSuccess);
+            Assert.True((await services.GetRequiredService<IOperators>().AssignAsync(Jane, "validator", By, Ct)).IsSuccess);
+        }
+        var john = app.ClientAs(John, Everything);
+
+        var created = await john.PostAsJsonAsync("/api/admin/registry/roles", new CreateRoleRequest("clerk", "compartment", "business", "Clerk", [ItemsRead.Identity]), Ct);
+        Assert.Equal(HttpStatusCode.Accepted, created.StatusCode);
+        var act = (await created.Content.ReadFromJsonAsync<PendingActSummary>(Ct))!;
+        Assert.Equal(("role_definition", "clerk", John), (act.Kind, act.Role, act.ProposedBy));
+        Assert.Contains((await john.GetFromJsonAsync<PendingActSummary[]>("/api/admin/registry/validations", Ct))!, a => a.ActId == act.ActId);
+
+        var own = await john.PostAsync($"/api/admin/registry/validations/{act.ActId}/validate", null, Ct);
+        Assert.Equal(RegistryErrors.OwnActCode, await own.CodeOfAsync(Ct));
+        Assert.Equal(HttpStatusCode.NoContent, (await app.ClientAs(Jane, Everything).PostAsync($"/api/admin/registry/validations/{act.ActId}/validate", null, Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await john.GetAsync("/api/admin/registry/roles/clerk", Ct)).StatusCode);
+
+        Assert.True((await john.PostAsJsonAsync("/api/admin/registry/compartments", new CreateCompartmentRequest("globex", "Globex", Jane), Ct)).IsSuccessStatusCode);
+        var rescue = await john.PutAsync($"/api/admin/registry/compartments/globex/owner/rescue/{John}", null, Ct);
+        Assert.Equal(RegistryErrors.OwnRolesCode, await rescue.CodeOfAsync(Ct));
+        Assert.Equal(HttpStatusCode.Forbidden, (await app.ClientAs(Jane, Reads).PutAsync($"/api/admin/registry/compartments/globex/owner/rescue/{John}", null, Ct)).StatusCode);
     }
 }

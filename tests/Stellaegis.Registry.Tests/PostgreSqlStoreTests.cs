@@ -93,6 +93,8 @@ public sealed class PostgreSqlStoreTests(PostgreSqlFixture database) : IAsyncLif
     [InlineData("insert into reg.roles values ('reader', 'compartment', 'business', 'x', true, 'none', true, false, now(), 'job:tests', now(), 'job:tests')", "23514")]
     [InlineData("insert into reg.roles values ('ops', 'platform', 'administration', 'x', true, 'none', false, false, now(), 'job:tests', now(), 'job:tests')", "23514")]
     [InlineData("insert into reg.role_assignable_roles values ('nobody', 'nobody')", "23503")]
+    [InlineData("insert into reg.pending_acts (act_id, kind, subject, role, proposed_at, proposed_by, expires_at) values (gen_random_uuid(), 'platform_role', null, 'ops', now(), 'job:tests', now() + interval '7 days')", "23514")]
+    [InlineData("insert into reg.pending_acts (act_id, kind, role, proposed_at, proposed_by, expires_at) values (gen_random_uuid(), 'promotion', 'ops', now(), 'job:tests', now() + interval '7 days')", "23514")]
     [InlineData("insert into reg.compartments values ('acme', 'x', 'active', now(), 'job:tests', now(), 'job:tests', 'jane')", "23514")]
     [InlineData("insert into reg.invitations (invitation_id, token_hash, compartment, email, designates_owner, delivery, issued_at, issued_by, expires_at) values (gen_random_uuid(), 'ZZ', 'acme', 'a@b.c', false, 'email', now(), 'job:tests', now() + interval '1 day')", "23514")]
     [InlineData("insert into reg.invitations (invitation_id, token_hash, compartment, email, designates_owner, delivery, issued_at, issued_by, expires_at) values (gen_random_uuid(), repeat('a', 64), 'acme', 'A@b.c', false, 'email', now(), 'job:tests', now() + interval '1 day')", "23514")]
@@ -384,5 +386,40 @@ public sealed class PostgreSqlStoreTests(PostgreSqlFixture database) : IAsyncLif
         Assert.False(await InvitationStore.TryAcceptAsync(lapsed.TokenHash, John, Now.AddDays(2), Ct));
         Assert.Equal(1, await InvitationStore.DeleteDeadBeforeAsync(Now.AddDays(40), Ct));
         Assert.Equal([live.InvitationId], (await InvitationStore.ListByCompartmentAsync(Acme, Ct)).Select(i => i.InvitationId));
+    }
+
+    private IPendingActStore Acts => Host.Services.GetRequiredService<IPendingActStore>();
+
+    [Fact]
+    public async Task An_act_waits_with_its_definition_and_closes_once_and_a_rescue_seats_another_owner_at_once()
+    {
+        await SeedAsync();
+        var definition = new RoleDefinition(RoleCategory.Administration, "Manager", ["items.read"], new AssignableRoles(CompartmentRoleSelector.Business, false, ["reader"]), true);
+        var act = new PendingAct(Guid.NewGuid(), PendingActKind.RoleDefinition, null, "manager", null, RoleScope.Compartment, definition, Granted, Now.AddDays(7));
+        await Acts.InsertAsync(act, Ct);
+
+        var read = (await Acts.GetAsync(act.ActId, Ct))!;
+        Assert.Equal((PendingActKind.RoleDefinition, "manager", RoleScope.Compartment), (read.Kind, read.Role, read.Scope));
+        Assert.Equal((RoleCategory.Administration, "Manager", true), (read.Definition!.Category, read.Definition.DisplayName, read.Definition.RequiresSecondFactor));
+        Assert.Equal(CompartmentRoleSelector.Business, read.Definition.Assignable!.Compartment);
+        Assert.Equal(["reader"], read.Definition.Assignable.Roles);
+        Assert.True(await Acts.MarkValidatedAsync(act.ActId, Granted, Ct));
+        Assert.False(await Acts.MarkRejectedAsync(act.ActId, Granted, Ct));
+        Assert.NotNull((await Acts.GetAsync(act.ActId, Ct))!.Validated);
+
+        var rescue = new PendingAct(Guid.NewGuid(), PendingActKind.OwnershipRescue, John, null, Acme, null, null, Granted, Now.AddDays(7));
+        await Acts.InsertAsync(rescue, Ct);
+        Assert.Contains(await Acts.ListAsync(Ct), a => a.ActId == rescue.ActId && a.Compartment == Acme);
+
+        await Roles.SaveAsync(new Role(RegistryRoles.Owner, RoleScope.Compartment, RoleCategory.Administration, "Owner", Declared: true, [],
+            AssignableRoles.Every(CompartmentRoleSelector.All), true, Seeded), Ct);
+        Assert.True(await Compartments.SeatOwnerAsync(Acme, Jane, Granted, Ct));
+        await Memberships.AssignRoleAsync(Jane, Acme, "reader", Granted, Ct);
+        Assert.True(await Compartments.RescueOwnershipAsync(Acme, John, Granted, Ct));
+        Assert.Equal(John, (await Compartments.GetAsync(Acme, Ct))!.Owner);
+        var members = (await Memberships.ListByCompartmentAsync(Acme, Ct)).ToDictionary(m => m.Subject, m => m.Roles);
+        Assert.Equal([RegistryRoles.Owner], members[John]);
+        Assert.Equal(["reader"], members[Jane]);
+        Assert.False(await Compartments.RescueOwnershipAsync(Compartment.Parse("nowhere"), John, Granted, Ct));
     }
 }

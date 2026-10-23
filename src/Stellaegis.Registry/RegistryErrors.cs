@@ -116,6 +116,24 @@ public static class RegistryErrors
     /// <summary>The code of <see cref="InvitationStale"/>.</summary>
     public const string InvitationStaleCode = "Invitation.Stale";
 
+    /// <summary>The code of <see cref="ActPending"/>.</summary>
+    public const string ActPendingCode = "Act.Pending";
+
+    /// <summary>The code of <see cref="ActNotFound"/>.</summary>
+    public const string ActNotFoundCode = "Act.NotFound";
+
+    /// <summary>The code of <see cref="ActClosed"/>.</summary>
+    public const string ActClosedCode = "Act.Closed";
+
+    /// <summary>The code of <see cref="ActExpired"/>.</summary>
+    public const string ActExpiredCode = "Act.Expired";
+
+    /// <summary>The code of <see cref="OwnAct"/>.</summary>
+    public const string OwnActCode = "Act.Own";
+
+    /// <summary>The code of <see cref="NotValidator"/>.</summary>
+    public const string NotValidatorCode = "Act.NotValidator";
+
     /// <summary>The code of <see cref="UnknownOperation"/>.</summary>
     public const string UnknownOperationCode = "Catalog.UnknownOperation";
 
@@ -268,6 +286,30 @@ public static class RegistryErrors
     /// <summary>What the invitation assumed no longer holds: it does not serve, and nothing is applied.</summary>
     public static Error InvitationStale(string why)
         => Error.PreconditionFailed(InvitationStaleCode, $"The invitation no longer holds: {why}.");
+
+    /// <summary>An act on the same target waits already: it is validated, rejected or lapses first.</summary>
+    public static Error ActPending(Guid actId)
+        => Error.Conflict(ActPendingCode, $"An act on the same target waits for its validation already: {actId}.");
+
+    /// <summary>The act is not in the registry.</summary>
+    public static Error ActNotFound()
+        => Error.NotFound(ActNotFoundCode, "The act is not in the registry.");
+
+    /// <summary>The act was validated or rejected already.</summary>
+    public static Error ActClosed()
+        => Error.PreconditionFailed(ActClosedCode, "The act was validated or rejected already.");
+
+    /// <summary>The act lapsed, unvalidated: it is proposed again.</summary>
+    public static Error ActExpired()
+        => Error.PreconditionFailed(ActExpiredCode, "The act lapsed unvalidated; propose it again.");
+
+    /// <summary>Nobody validates their own act on screen: the validate verb of the host is the other channel.</summary>
+    public static Error OwnAct()
+        => Error.Forbidden(OwnActCode, "Nobody validates their own act on screen; the validate verb of the host is the other channel.");
+
+    /// <summary>The author of the validation does not hold validations.write by a platform role.</summary>
+    public static Error NotValidator()
+        => Error.Forbidden(NotValidatorCode, "The author of the validation holds no platform role carrying validations.write.");
 
     /// <summary>The operation is not in the catalogue: no module declares it.</summary>
     public static Error UnknownOperation(string operation)

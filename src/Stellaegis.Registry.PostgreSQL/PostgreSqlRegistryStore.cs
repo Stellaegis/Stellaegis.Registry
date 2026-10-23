@@ -14,7 +14,7 @@ namespace Stellaegis.Registry.PostgreSQL;
 /// none is shared between two.
 /// </summary>
 internal sealed class PostgreSqlRegistryStore
-    : ICompartmentStore, IUserStore, ICatalogStore, IRoleStore, IMembershipStore, IOperatorStore, IInvitationStore, IAsyncDisposable, IDisposable
+    : ICompartmentStore, IUserStore, ICatalogStore, IRoleStore, IMembershipStore, IOperatorStore, IInvitationStore, IPendingActStore, IAsyncDisposable, IDisposable
 {
     private readonly NpgsqlDataSource _dataSource;
     private readonly AdoUnitOfWorkFactory<RegistryDatabase> _units;
@@ -34,7 +34,8 @@ internal sealed class PostgreSqlRegistryStore
             .Add<RoleRepository>((connection, transaction) => new RoleRepository(connection, transaction))
             .Add<MembershipRepository>((connection, transaction) => new MembershipRepository(connection, transaction))
             .Add<OperatorRepository>((connection, transaction) => new OperatorRepository(connection, transaction))
-            .Add<InvitationRepository>((connection, transaction) => new InvitationRepository(connection, transaction));
+            .Add<InvitationRepository>((connection, transaction) => new InvitationRepository(connection, transaction))
+            .Add<PendingActRepository>((connection, transaction) => new PendingActRepository(connection, transaction));
 
         _dataSource = NpgsqlDataSource.Create(value.ConnectionString);
         _units = new AdoUnitOfWorkFactory<RegistryDatabase>(_dataSource, registry);
@@ -78,6 +79,57 @@ internal sealed class PostgreSqlRegistryStore
         await memberships.InsertRoleAsync(owner, compartment.Value, RegistryRoles.Owner, granted, cancellationToken).ConfigureAwait(false);
         await uow.CommitAsync(cancellationToken).ConfigureAwait(false);
         return true;
+    }
+
+    async Task<bool> ICompartmentStore.RescueOwnershipAsync(Compartment compartment, string owner, Stamp granted, CancellationToken cancellationToken)
+    {
+        Guard.NotNull(compartment);
+        await using var uow = await _units.OpenAndBeginAsync(cancellationToken).ConfigureAwait(false);
+        var compartments = uow.Repo<CompartmentRepository>();
+        if (!await compartments.ExistsAsync(compartment.Value, cancellationToken).ConfigureAwait(false))
+            return false;
+        var previous = await compartments.ReplaceOwnerAnyAsync(compartment.Value, owner, cancellationToken).ConfigureAwait(false);
+        var memberships = uow.Repo<MembershipRepository>();
+        if (previous is not null && previous != owner)
+            await memberships.DeleteRoleAsync(previous, compartment.Value, RegistryRoles.Owner, cancellationToken).ConfigureAwait(false);
+        await memberships.InsertAsync(owner, compartment.Value, granted, cancellationToken).ConfigureAwait(false);
+        await memberships.InsertRoleAsync(owner, compartment.Value, RegistryRoles.Owner, granted, cancellationToken).ConfigureAwait(false);
+        await compartments.DeleteTransferAsync(compartment.Value, cancellationToken).ConfigureAwait(false);
+        await uow.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
+    // ── Acts waiting for a validation ────────────────────────────────────────
+
+    async Task IPendingActStore.InsertAsync(PendingAct act, CancellationToken cancellationToken)
+    {
+        Guard.NotNull(act);
+        await using var uow = await _units.OpenAsync(cancellationToken).ConfigureAwait(false);
+        await uow.Repo<PendingActRepository>().InsertAsync(act, cancellationToken).ConfigureAwait(false);
+    }
+
+    async Task<PendingAct?> IPendingActStore.GetAsync(Guid actId, CancellationToken cancellationToken)
+    {
+        await using var uow = await _units.OpenAsync(cancellationToken).ConfigureAwait(false);
+        return (await uow.Repo<PendingActRepository>().ListAsync(actId, cancellationToken).ConfigureAwait(false)).SingleOrDefault();
+    }
+
+    async Task<IReadOnlyList<PendingAct>> IPendingActStore.ListAsync(CancellationToken cancellationToken)
+    {
+        await using var uow = await _units.OpenAsync(cancellationToken).ConfigureAwait(false);
+        return await uow.Repo<PendingActRepository>().ListAsync(null, cancellationToken).ConfigureAwait(false);
+    }
+
+    async Task<bool> IPendingActStore.MarkValidatedAsync(Guid actId, Stamp validated, CancellationToken cancellationToken)
+    {
+        await using var uow = await _units.OpenAsync(cancellationToken).ConfigureAwait(false);
+        return await uow.Repo<PendingActRepository>().CloseAsync(actId, validated: true, validated, cancellationToken).ConfigureAwait(false);
+    }
+
+    async Task<bool> IPendingActStore.MarkRejectedAsync(Guid actId, Stamp rejected, CancellationToken cancellationToken)
+    {
+        await using var uow = await _units.OpenAsync(cancellationToken).ConfigureAwait(false);
+        return await uow.Repo<PendingActRepository>().CloseAsync(actId, validated: false, rejected, cancellationToken).ConfigureAwait(false);
     }
 
     async Task<OwnershipTransfer?> ICompartmentStore.GetTransferAsync(Compartment compartment, CancellationToken cancellationToken)

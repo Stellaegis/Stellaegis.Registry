@@ -35,6 +35,13 @@ public interface ICompartmentStore
     /// writing nothing, when the compartment is no longer owned by <see cref="OwnershipTransfer.From"/>.
     /// </summary>
     Task<bool> TransferOwnershipAsync(OwnershipTransfer transfer, IReadOnlyCollection<string> dropped, Stamp granted, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Seats another owner, whoever owns the compartment now, at once: the owner, the membership if missing, the role of
+    /// the owner; the former owner loses it, and keeps their other roles; a transfer waiting is removed.
+    /// <see langword="false"/>, writing nothing, when the compartment does not exist.
+    /// </summary>
+    Task<bool> RescueOwnershipAsync(Compartment compartment, string owner, Stamp granted, CancellationToken cancellationToken = default);
 }
 
 /// <summary>The users, the projection of the accounts of Identity.</summary>

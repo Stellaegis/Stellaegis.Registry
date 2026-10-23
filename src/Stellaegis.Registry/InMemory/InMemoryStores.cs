@@ -22,6 +22,8 @@ public sealed class InMemoryRegistryData
 
     internal ConcurrentDictionary<Guid, Invitation> Invitations { get; } = new();
 
+    internal ConcurrentDictionary<Guid, PendingAct> Acts { get; } = new();
+
     // The ownership of a compartment changes under this lock: its owner, its membership and roles, at once.
     internal object OwnershipLock { get; } = new();
 
@@ -36,6 +38,7 @@ public sealed class InMemoryRegistryData
         Operators.Clear();
         Transfers.Clear();
         Invitations.Clear();
+        Acts.Clear();
     }
 
     internal static IReadOnlyCollection<string> Snapshot(Dictionary<string, Stamp> set)
@@ -115,6 +118,24 @@ internal sealed class InMemoryCompartmentStore(InMemoryRegistryData data) : ICom
                         outgoing.Roles.Remove(role);
                 }
             data.Transfers.TryRemove(transfer.Compartment, out _);
+            return Task.FromResult(true);
+        }
+    }
+
+    public Task<bool> RescueOwnershipAsync(Compartment compartment, string owner, Stamp granted, CancellationToken cancellationToken = default)
+    {
+        lock (data.OwnershipLock)
+        {
+            if (!data.Compartments.TryGetValue(compartment, out var record))
+                return Task.FromResult(false);
+            if (record.Owner is { } previous && previous != owner && data.Memberships.TryGetValue((previous, compartment), out var outgoing))
+                lock (outgoing.Roles)
+                    outgoing.Roles.Remove(RegistryRoles.Owner);
+            data.Compartments[compartment] = record with { Owner = owner };
+            var incoming = data.Memberships.GetOrAdd((owner, compartment), _ => new InMemoryRegistryData.MembershipEntry(granted));
+            lock (incoming.Roles)
+                incoming.Roles.TryAdd(RegistryRoles.Owner, granted);
+            data.Transfers.TryRemove(compartment, out _);
             return Task.FromResult(true);
         }
     }
@@ -317,6 +338,38 @@ internal sealed class InMemoryInvitationStore(InMemoryRegistryData data) : IInvi
             foreach (var id in dead)
                 data.Invitations.TryRemove(id, out _);
             return Task.FromResult(dead.Count);
+        }
+    }
+}
+
+internal sealed class InMemoryPendingActStore(InMemoryRegistryData data) : IPendingActStore
+{
+    public Task InsertAsync(PendingAct act, CancellationToken cancellationToken = default)
+    {
+        data.Acts[act.ActId] = act;
+        return Task.CompletedTask;
+    }
+
+    public Task<PendingAct?> GetAsync(Guid actId, CancellationToken cancellationToken = default)
+        => Task.FromResult(data.Acts.GetValueOrDefault(actId));
+
+    public Task<IReadOnlyList<PendingAct>> ListAsync(CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyList<PendingAct>>(data.Acts.Values.OrderByDescending(act => act.Proposed.At).ToList());
+
+    public Task<bool> MarkValidatedAsync(Guid actId, Stamp validated, CancellationToken cancellationToken = default)
+        => Close(actId, act => act with { Validated = validated });
+
+    public Task<bool> MarkRejectedAsync(Guid actId, Stamp rejected, CancellationToken cancellationToken = default)
+        => Close(actId, act => act with { Rejected = rejected });
+
+    private Task<bool> Close(Guid actId, Func<PendingAct, PendingAct> close)
+    {
+        lock (data.Acts)
+        {
+            if (!data.Acts.TryGetValue(actId, out var act) || act.Validated is not null || act.Rejected is not null)
+                return Task.FromResult(false);
+            data.Acts[actId] = close(act);
+            return Task.FromResult(true);
         }
     }
 }

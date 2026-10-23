@@ -7,8 +7,8 @@
 -- data rights by the installation. The record of the scripts applied is the installation's,
 -- reg._schema_migrations, not this script's.
 --
--- Thirteen tables: the compartments and the transfers of their ownership with the roles a transfer
--- keeps, the invitations with the roles they give, the users (the projection of the accounts of Identity), the catalogue of the operations the
+-- Fourteen tables: the compartments and the transfers of their ownership with the roles a transfer
+-- keeps, the invitations with the roles they give, the acts waiting for a validation, the users (the projection of the accounts of Identity), the catalogue of the operations the
 -- modules declare, the roles with their operations and the roles they let their holder assign, and
 -- the two parallel models of the rights — the persons in the compartments (memberships,
 -- member_roles) and the operators of the platform (operator_roles) — never mixed. The effective rights are not here:
@@ -351,3 +351,41 @@ create table reg.invitation_roles (
 );
 
 comment on table reg.invitation_roles is 'The roles each invitation gives, by name. One row per (invitation, role); gone with the invitation.';
+
+-- ── Acts waiting for a validation ────────────────────────────────────────────
+-- The assignment of a platform role, the definition of a role, the rescue of an ownership take effect
+-- only once a second channel validated them: until then they exist only here. A row stays once
+-- closed, the trace of who proposed and who validated or rejected. The definition proposed is JSON:
+-- the scope, the category, the display name, the operations, the assignable list, the second factor.
+
+create table reg.pending_acts (
+  act_id        uuid         not null,
+  kind          varchar(16)  not null,
+  subject       varchar(32),
+  role          varchar(63),
+  compartment   varchar(63),
+  definition    jsonb,
+  proposed_at   timestamptz  not null,
+  proposed_by   varchar(128) not null,
+  expires_at    timestamptz  not null,
+  validated_at  timestamptz,
+  validated_by  varchar(128),
+  rejected_at   timestamptz,
+  rejected_by   varchar(128),
+
+  constraint pk_pending_acts primary key (act_id),
+  constraint ck_pending_acts_kind check (kind in ('platform_role', 'role_definition', 'ownership_rescue')),
+  constraint ck_pending_acts_target check (
+    (kind = 'platform_role' and subject is not null and role is not null and compartment is null and definition is null)
+    or (kind = 'role_definition' and subject is null and role is not null and compartment is null and definition is not null)
+    or (kind = 'ownership_rescue' and subject is not null and role is null and compartment is not null and definition is null)),
+  constraint ck_pending_acts_proposed_by check (proposed_by ~ '^[^[:space:][:cntrl:]]([^[:cntrl:]]{0,126}[^[:space:][:cntrl:]])?$'),
+  constraint ck_pending_acts_expires_at check (expires_at > proposed_at),
+  constraint ck_pending_acts_validated check ((validated_at is null) = (validated_by is null)),
+  constraint ck_pending_acts_rejected check ((rejected_at is null) = (rejected_by is null)),
+  constraint ck_pending_acts_one_end check (validated_at is null or rejected_at is null),
+  constraint fk_pending_acts_subject foreign key (subject) references reg.users (subject),
+  constraint fk_pending_acts_compartment foreign key (compartment) references reg.compartments (compartment)
+);
+
+comment on table reg.pending_acts is 'The sensitive acts waiting for a validation by a second channel, and their trace once closed. One row per act.';

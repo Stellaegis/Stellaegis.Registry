@@ -111,7 +111,7 @@ public sealed class PostgreSqlFixture : IAsyncLifetime
         await using var connection = await OpenAsync(asApplication: true, cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            delete from reg.invitation_roles; delete from reg.invitations;
+            delete from reg.pending_acts; delete from reg.invitation_roles; delete from reg.invitations;
             delete from reg.ownership_transfer_kept_roles; delete from reg.ownership_transfers;
             delete from reg.member_roles; delete from reg.memberships; delete from reg.operator_roles;
             delete from reg.role_assignable_roles; delete from reg.role_operations; delete from reg.roles; delete from reg.operations;
