@@ -150,15 +150,15 @@ public sealed class AdminEndpointsTests
         Assert.Equal(HttpStatusCode.OK, renamed.StatusCode);                                   // a display name gives nothing: at once
         Assert.Equal([ItemsRead.Identity], (await client.GetFromJsonAsync<RoleSummary>("/api/admin/registry/roles/picker", Ct))!.Operations);
 
-        // The category, the assignable list and the second factor go through the routes; a platform role always requires one.
+        // The category and the assignable list go through the routes.
         await ValidatedAsync(app, await client.PostAsJsonAsync("/api/admin/registry/roles",
-            new CreateRoleRequest("pick_manager", "compartment", "administration", "Picking manager", [], new AssignableRolesBody("business", false, ["picker"]), RequiresSecondFactor: true), Ct));
+            new CreateRoleRequest("pick_manager", "compartment", "administration", "Picking manager", [], new AssignableRolesBody("business", false, ["picker"])), Ct));
         var managed = (await client.GetFromJsonAsync<RoleSummary>("/api/admin/registry/roles/pick_manager", Ct))!;
-        Assert.Equal(("administration", "business", false, true), (managed.Category, managed.Assignable.Compartment, managed.Assignable.Platform, managed.RequiresSecondFactor));
+        Assert.Equal(("administration", "business", false), (managed.Category, managed.Assignable.Compartment, managed.Assignable.Platform));
         Assert.Equal(["picker"], managed.Assignable.Roles);
         await ValidatedAsync(app, await client.PostAsJsonAsync("/api/admin/registry/roles", new CreateRoleRequest("ops", "platform", "administration", "Operations", []), Ct));
         var ops = (await client.GetFromJsonAsync<RoleSummary>("/api/admin/registry/roles/ops", Ct))!;
-        Assert.True(ops.RequiresSecondFactor);
+        Assert.Equal("platform", ops.Scope);
         Assert.Equal(HttpStatusCode.BadRequest, (await client.PostAsJsonAsync("/api/admin/registry/roles", new CreateRoleRequest("odd", "compartment", "boss", "Odd", []), Ct)).StatusCode);
         Assert.Equal(HttpStatusCode.BadRequest, (await client.PostAsJsonAsync("/api/admin/registry/roles", new CreateRoleRequest("odd", "compartment", "business", "Odd", [], new AssignableRolesBody("some", false, [])), Ct)).StatusCode);
         Assert.Equal(HttpStatusCode.BadRequest, (await client.PostAsJsonAsync("/api/admin/registry/roles", new CreateRoleRequest("odd", "compartment", "1", "Odd", []), Ct)).StatusCode);

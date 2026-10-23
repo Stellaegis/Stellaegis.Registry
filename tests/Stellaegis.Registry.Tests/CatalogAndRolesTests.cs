@@ -104,23 +104,20 @@ public sealed class CatalogAndRolesTests
     }
 
     [Fact]
-    public async Task A_role_carries_its_category_its_assignable_roles_and_its_second_factor_and_a_platform_role_always_requires_one()
+    public async Task A_role_carries_its_category_and_the_roles_it_lets_its_holder_assign()
     {
         using var host = await new TestHost().InstalledAsync(Ct);
         var manager = await host.Roles.CreateAsync("access_manager", RoleScope.Compartment,
             new RoleDefinition(RoleCategory.Administration, "Access manager", [], AssignableRoles.Every(CompartmentRoleSelector.Business)), By, Ct);
         var clerk = await host.Roles.CreateAsync("clerk", RoleScope.Compartment,
-            new RoleDefinition(RoleCategory.Business, "Clerk", [ItemsRead.Identity], RequiresSecondFactor: true), By, Ct);
+            new RoleDefinition(RoleCategory.Business, "Clerk", [ItemsRead.Identity]), By, Ct);
         var ops = await host.Roles.CreateAsync("ops", RoleScope.Platform,
-            new RoleDefinition(RoleCategory.Administration, "Operations", [ItemsPurge.Identity], RequiresSecondFactor: false), By, Ct);
+            new RoleDefinition(RoleCategory.Administration, "Operations", [ItemsPurge.Identity]), By, Ct);
         Assert.True(manager.IsSuccess && clerk.IsSuccess && ops.IsSuccess);
 
         var roles = (await host.Roles.ListAsync(cancellationToken: Ct)).ToDictionary(role => role.Name);
         Assert.Equal(RoleCategory.Administration, roles["access_manager"].Category);
-        Assert.True(roles["clerk"].RequiresSecondFactor);
-        Assert.False(roles["reader"].RequiresSecondFactor);
-        Assert.True(roles["ops"].RequiresSecondFactor);            // forced: a platform role always requires one
-        Assert.True(roles["super_admin"].RequiresSecondFactor);
+        Assert.Equal(RoleCategory.Business, roles["clerk"].Category);
 
         // The selectors cover the roles to come; a business selector, never an administration role.
         var business = roles["access_manager"].Assignable;

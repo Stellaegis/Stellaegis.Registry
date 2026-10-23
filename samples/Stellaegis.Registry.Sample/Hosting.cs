@@ -177,11 +177,12 @@ public sealed class AccessRightsSink(IAccessProjection projection) : IRightsSink
     public Task ReplaceMembershipsAsync(string subject, IReadOnlyCollection<Compartment> compartments, CancellationToken cancellationToken = default)
         => projection.ReplaceMembershipsAsync(subject, compartments, cancellationToken);
 
-    public Task ReplaceUserGrantsAsync(string subject, Compartment compartment, IReadOnlyCollection<string> operations, CancellationToken cancellationToken = default)
-        => projection.ReplaceUserGrantsAsync(subject, compartment, operations, cancellationToken);
+    // Access 5 decides without a second factor: the requirement each grant carries waits for its major.
+    public Task ReplaceUserGrantsAsync(string subject, Compartment compartment, IReadOnlyCollection<OperationGrant> grants, CancellationToken cancellationToken = default)
+        => projection.ReplaceUserGrantsAsync(subject, compartment, grants.Select(grant => grant.Operation).ToList(), cancellationToken);
 
-    public Task ReplaceAdminGrantsAsync(string subject, IReadOnlyCollection<string> operations, CancellationToken cancellationToken = default)
-        => projection.ReplaceAdminGrantsAsync(subject, operations, cancellationToken);
+    public Task ReplaceAdminGrantsAsync(string subject, IReadOnlyCollection<OperationGrant> grants, CancellationToken cancellationToken = default)
+        => projection.ReplaceAdminGrantsAsync(subject, grants.Select(grant => grant.Operation).ToList(), cancellationToken);
 
     public Task RemoveCompartmentAsync(Compartment compartment, CancellationToken cancellationToken = default)
         => projection.RemoveCompartmentAsync(compartment, cancellationToken);

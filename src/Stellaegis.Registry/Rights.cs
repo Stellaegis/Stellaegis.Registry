@@ -16,11 +16,17 @@ public interface IRightsSink
     /// <summary>Replaces the compartments the person is admitted in; empty removes them all.</summary>
     Task ReplaceMembershipsAsync(string subject, IReadOnlyCollection<Compartment> compartments, CancellationToken cancellationToken = default);
 
-    /// <summary>Replaces the rights of a person in a compartment, by operation identity; empty removes them all.</summary>
-    Task ReplaceUserGrantsAsync(string subject, Compartment compartment, IReadOnlyCollection<string> operations, CancellationToken cancellationToken = default);
+    /// <summary>
+    /// Replaces the rights of a person in a compartment, each operation with whether it requires a second factor —
+    /// sensitive in itself, as the catalogue says; empty removes them all.
+    /// </summary>
+    Task ReplaceUserGrantsAsync(string subject, Compartment compartment, IReadOnlyCollection<OperationGrant> grants, CancellationToken cancellationToken = default);
 
-    /// <summary>Replaces the rights of a person in the shared space — what makes them an operator of the platform; empty removes them all.</summary>
-    Task ReplaceAdminGrantsAsync(string subject, IReadOnlyCollection<string> operations, CancellationToken cancellationToken = default);
+    /// <summary>
+    /// Replaces the rights of a person in the shared space — what makes them an operator of the platform —, each
+    /// requiring a second factor: every operation of the shared space administers; empty removes them all.
+    /// </summary>
+    Task ReplaceAdminGrantsAsync(string subject, IReadOnlyCollection<OperationGrant> grants, CancellationToken cancellationToken = default);
 
     /// <summary>Removes every membership and every right granted in the compartment, once it is terminated or suspended.</summary>
     Task RemoveCompartmentAsync(Compartment compartment, CancellationToken cancellationToken = default);
@@ -38,10 +44,10 @@ public sealed class NullRightsSink(ILogger<NullRightsSink> logger) : IRightsSink
     public Task ReplaceMembershipsAsync(string subject, IReadOnlyCollection<Compartment> compartments, CancellationToken cancellationToken = default) => Drop();
 
     /// <inheritdoc/>
-    public Task ReplaceUserGrantsAsync(string subject, Compartment compartment, IReadOnlyCollection<string> operations, CancellationToken cancellationToken = default) => Drop();
+    public Task ReplaceUserGrantsAsync(string subject, Compartment compartment, IReadOnlyCollection<OperationGrant> grants, CancellationToken cancellationToken = default) => Drop();
 
     /// <inheritdoc/>
-    public Task ReplaceAdminGrantsAsync(string subject, IReadOnlyCollection<string> operations, CancellationToken cancellationToken = default) => Drop();
+    public Task ReplaceAdminGrantsAsync(string subject, IReadOnlyCollection<OperationGrant> grants, CancellationToken cancellationToken = default) => Drop();
 
     /// <inheritdoc/>
     public Task RemoveCompartmentAsync(Compartment compartment, CancellationToken cancellationToken = default) => Drop();
@@ -87,12 +93,12 @@ public sealed class RecordingRightsSink : IRightsSink
         => Record(new RightsSinkCall(RightsSinkCallKind.ReplaceMemberships, subject, null, [.. compartments.Select(c => c.Value)]));
 
     /// <inheritdoc/>
-    public Task ReplaceUserGrantsAsync(string subject, Compartment compartment, IReadOnlyCollection<string> operations, CancellationToken cancellationToken = default)
-        => Record(new RightsSinkCall(RightsSinkCallKind.ReplaceUserGrants, subject, compartment, [.. operations]));
+    public Task ReplaceUserGrantsAsync(string subject, Compartment compartment, IReadOnlyCollection<OperationGrant> grants, CancellationToken cancellationToken = default)
+        => Record(RightsSinkCall.Of(RightsSinkCallKind.ReplaceUserGrants, subject, compartment, grants));
 
     /// <inheritdoc/>
-    public Task ReplaceAdminGrantsAsync(string subject, IReadOnlyCollection<string> operations, CancellationToken cancellationToken = default)
-        => Record(new RightsSinkCall(RightsSinkCallKind.ReplaceAdminGrants, subject, null, [.. operations]));
+    public Task ReplaceAdminGrantsAsync(string subject, IReadOnlyCollection<OperationGrant> grants, CancellationToken cancellationToken = default)
+        => Record(RightsSinkCall.Of(RightsSinkCallKind.ReplaceAdminGrants, subject, null, grants));
 
     /// <inheritdoc/>
     public Task RemoveCompartmentAsync(Compartment compartment, CancellationToken cancellationToken = default)
@@ -115,8 +121,12 @@ public sealed class RecordingRightsSink : IRightsSink
 /// <param name="Subject">The subject, when the method names one.</param>
 /// <param name="Compartment">The compartment, when the method names one.</param>
 /// <param name="Values">The compartments or the operations handed, as strings, in the order given.</param>
-public sealed record RightsSinkCall(RightsSinkCallKind Kind, string? Subject, Compartment? Compartment, IReadOnlyList<string> Values)
+/// <param name="SecondFactor">Of the operations handed, those requiring a second factor, in the order given.</param>
+public sealed record RightsSinkCall(RightsSinkCallKind Kind, string? Subject, Compartment? Compartment, IReadOnlyList<string> Values, IReadOnlyList<string>? SecondFactor = null)
 {
+    internal static RightsSinkCall Of(RightsSinkCallKind kind, string subject, Compartment? compartment, IReadOnlyCollection<OperationGrant> grants)
+        => new(kind, subject, compartment, [.. grants.Select(grant => grant.Operation)], [.. grants.Where(grant => grant.RequiresSecondFactor).Select(grant => grant.Operation)]);
+
     /// <summary>Two calls are equal when their kind, subject, compartment and values, in order, are.</summary>
     public bool Equals(RightsSinkCall? other)
         => other is not null && Kind == other.Kind && Subject == other.Subject && Compartment == other.Compartment && Values.SequenceEqual(other.Values, StringComparer.Ordinal);
@@ -157,6 +167,7 @@ internal sealed class RightsProjector(
     IUserStore users,
     ICompartmentStore compartments,
     IRoleStore roles,
+    ICatalogStore catalog,
     IMembershipStore memberships,
     IOperatorStore operators,
     IRightsSink sink,
@@ -190,7 +201,9 @@ internal sealed class RightsProjector(
             if (membership is not null)
                 await UnionAsync(operations, membership.Roles, ct).ConfigureAwait(false);
         }
-        await sink.ReplaceUserGrantsAsync(subject, compartment, operations, ct).ConfigureAwait(false);
+        // The requirement of a second factor is the operation's, as the catalogue says, whichever role grants it.
+        var sensitive = (await catalog.ListAsync(ct).ConfigureAwait(false)).Where(entry => entry.RequiresSecondFactor).Select(entry => entry.Operation).ToHashSet(StringComparer.Ordinal);
+        await sink.ReplaceUserGrantsAsync(subject, compartment, operations.Select(operation => new OperationGrant(operation, sensitive.Contains(operation))).ToList(), ct).ConfigureAwait(false);
         await publisher.PublishAsync(new RightsChangedEvent { OccurredAt = time.GetUtcNow(), Subject = subject, Compartment = compartment }, ct).ConfigureAwait(false);
     }
 
@@ -200,7 +213,8 @@ internal sealed class RightsProjector(
         var operations = new SortedSet<string>(StringComparer.Ordinal);
         if (await IsActiveAsync(subject, ct).ConfigureAwait(false))
             await UnionAsync(operations, await operators.ListRolesAsync(subject, ct).ConfigureAwait(false), ct).ConfigureAwait(false);
-        await sink.ReplaceAdminGrantsAsync(subject, operations, ct).ConfigureAwait(false);
+        // Every operation of the shared space requires a second factor: there, every operation administers.
+        await sink.ReplaceAdminGrantsAsync(subject, operations.Select(operation => new OperationGrant(operation, true)).ToList(), ct).ConfigureAwait(false);
         await publisher.PublishAsync(new RightsChangedEvent { OccurredAt = time.GetUtcNow(), Subject = subject, Compartment = null }, ct).ConfigureAwait(false);
     }
 

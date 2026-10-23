@@ -268,6 +268,13 @@ internal sealed class PostgreSqlRegistryStore
         await uow.Repo<CatalogRepository>().UpsertAsync(entries.DistinctBy(e => e.Operation, StringComparer.Ordinal).ToList(), cancellationToken).ConfigureAwait(false);
     }
 
+    async Task ICatalogStore.HardenAsync(IReadOnlyCollection<string> operations, CancellationToken cancellationToken)
+    {
+        Guard.NotNull(operations);
+        await using var uow = await _units.OpenAsync(cancellationToken).ConfigureAwait(false);
+        await uow.Repo<CatalogRepository>().HardenAsync(operations, cancellationToken).ConfigureAwait(false);
+    }
+
     // ── Roles ────────────────────────────────────────────────────────────────
 
     async Task<Role?> IRoleStore.GetAsync(string name, CancellationToken cancellationToken)

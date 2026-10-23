@@ -305,26 +305,32 @@ internal sealed class CatalogRepository(DbConnection connection, Func<DbTransact
 {
     public async Task<IReadOnlyList<CatalogEntry>> ListAsync(CancellationToken cancellationToken)
     {
-        var rows = await connection.QueryAsync<(string Module, string Operation, string Kind)>(new CommandDefinition(
-            "select module, operation, kind from reg.operations order by module, operation",
+        var rows = await connection.QueryAsync<(string Module, string Operation, string Kind, bool Declared, bool Hardened)>(new CommandDefinition(
+            "select module, operation, kind, declared_second_factor, hardened_second_factor from reg.operations order by module, operation",
             transaction: transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false);
-        return rows.Select(row => new CatalogEntry(row.Module, row.Operation, Names.KindOf(row.Kind))).ToList();
+        return rows.Select(row => new CatalogEntry(row.Module, row.Operation, Names.KindOf(row.Kind), row.Declared, row.Hardened)).ToList();
     }
 
     /// <summary>Inserts each entry, or replaces its module and kind — one statement, so one transaction.</summary>
     public Task UpsertAsync(IReadOnlyList<CatalogEntry> entries, CancellationToken cancellationToken)
         => connection.ExecuteAsync(new CommandDefinition(
             """
-            insert into reg.operations (operation, module, kind)
-            select * from unnest(@operations::text[], @modules::text[], @kinds::text[])
-            on conflict (operation) do update set module = excluded.module, kind = excluded.kind
+            insert into reg.operations (operation, module, kind, declared_second_factor, hardened_second_factor)
+            select o, m, k, d, false from unnest(@operations::text[], @modules::text[], @kinds::text[], @declared::boolean[]) as t(o, m, k, d)
+            on conflict (operation) do update set module = excluded.module, kind = excluded.kind, declared_second_factor = excluded.declared_second_factor
             """,
             new
             {
                 operations = entries.Select(e => e.Operation).ToArray(),
                 modules = entries.Select(e => e.Module).ToArray(),
                 kinds = entries.Select(e => Names.Of(e.Kind)).ToArray(),
+                declared = entries.Select(e => e.DeclaredSecondFactor).ToArray(),
             }, transaction(), cancellationToken: cancellationToken));
+
+    public Task HardenAsync(IReadOnlyCollection<string> operations, CancellationToken cancellationToken)
+        => connection.ExecuteAsync(new CommandDefinition(
+            "update reg.operations set hardened_second_factor = true where operation = any(@operations)",
+            new { operations = operations.ToArray() }, transaction(), cancellationToken: cancellationToken));
 }
 
 /// <summary>The rows of <c>reg.roles</c> and <c>reg.role_operations</c>.</summary>
@@ -332,7 +338,7 @@ internal sealed class RoleRepository(DbConnection connection, Func<DbTransaction
 {
     private sealed record Row(
         string Role, string Scope, string Category, string DisplayName, bool Declared, string AssignsCompartment, bool AssignsPlatform,
-        bool RequiresSecondFactor, DateTime CreatedAt, string CreatedBy, DateTime ModifiedAt, string ModifiedBy);
+        DateTime CreatedAt, string CreatedBy, DateTime ModifiedAt, string ModifiedBy);
 
     private sealed record Pair(string Role, string Value);
 
@@ -345,7 +351,7 @@ internal sealed class RoleRepository(DbConnection connection, Func<DbTransaction
         var rows = await connection.QueryAsync<Row>(new CommandDefinition(
             $"""
             select r.role as Role, r.scope as Scope, r.category as Category, r.display_name as DisplayName, r.declared as Declared,
-                   r.assigns_compartment as AssignsCompartment, r.assigns_platform as AssignsPlatform, r.requires_second_factor as RequiresSecondFactor,
+                   r.assigns_compartment as AssignsCompartment, r.assigns_platform as AssignsPlatform,
                    r.created_at as CreatedAt, r.created_by as CreatedBy, r.modified_at as ModifiedAt, r.modified_by as ModifiedBy
             from reg.roles r
             where {Filter}
@@ -362,7 +368,6 @@ internal sealed class RoleRepository(DbConnection connection, Func<DbTransaction
             .Select(row => new Role(row.Role, Names.ScopeOf(row.Scope), Names.CategoryOf(row.Category), row.DisplayName, row.Declared,
                 operations[row.Role].ToList(),
                 new AssignableRoles(Names.SelectorOf(row.AssignsCompartment), row.AssignsPlatform, assignable[row.Role].ToList()),
-                row.RequiresSecondFactor,
                 Names.AuditOf(row.CreatedAt, row.CreatedBy, row.ModifiedAt, row.ModifiedBy)))
             .ToList();
     }
@@ -370,14 +375,13 @@ internal sealed class RoleRepository(DbConnection connection, Func<DbTransaction
     public Task UpsertAsync(Role role, CancellationToken cancellationToken)
         => connection.ExecuteAsync(new CommandDefinition(
             """
-            insert into reg.roles (role, scope, category, display_name, declared, assigns_compartment, assigns_platform, requires_second_factor,
+            insert into reg.roles (role, scope, category, display_name, declared, assigns_compartment, assigns_platform,
                                    created_at, created_by, modified_at, modified_by)
-            values (@role, @scope, @category, @displayName, @declared, @assignsCompartment, @assignsPlatform, @requiresSecondFactor,
+            values (@role, @scope, @category, @displayName, @declared, @assignsCompartment, @assignsPlatform,
                     @createdAt, @createdBy, @modifiedAt, @modifiedBy)
             on conflict (role) do update set
               scope = excluded.scope, category = excluded.category, display_name = excluded.display_name, declared = excluded.declared,
               assigns_compartment = excluded.assigns_compartment, assigns_platform = excluded.assigns_platform,
-              requires_second_factor = excluded.requires_second_factor,
               modified_at = excluded.modified_at, modified_by = excluded.modified_by
             """,
             new
@@ -389,7 +393,6 @@ internal sealed class RoleRepository(DbConnection connection, Func<DbTransaction
                 declared = role.Declared,
                 assignsCompartment = Names.Of(role.Assignable.Compartment),
                 assignsPlatform = role.Assignable.AllPlatform,
-                requiresSecondFactor = role.RequiresSecondFactor,
                 createdAt = Names.Utc(role.Audit.Created.At),
                 createdBy = role.Audit.Created.By.Value,
                 modifiedAt = Names.Utc(role.Audit.Modified.At),
@@ -638,7 +641,7 @@ internal sealed class PendingActRepository(DbConnection connection, Func<DbTrans
         DateTime ExpiresAt, DateTime? ValidatedAt, string? ValidatedBy, DateTime? RejectedAt, string? RejectedBy);
 
     // The definition as JSON, in the names of the routes.
-    private sealed record DefinitionJson(string Scope, string Category, string DisplayName, string[] Operations, string AssignsCompartment, bool AssignsPlatform, string[] AssignableRoles, bool RequiresSecondFactor);
+    private sealed record DefinitionJson(string Scope, string Category, string DisplayName, string[] Operations, string AssignsCompartment, bool AssignsPlatform, string[] AssignableRoles);
 
     private const string Select = """
         select act_id as ActId, kind as Kind, subject as Subject, role as Role, compartment as Compartment, definition::text as Definition,
@@ -702,7 +705,7 @@ internal sealed class PendingActRepository(DbConnection connection, Func<DbTrans
         return new PendingAct(row.ActId, kind, row.Subject, row.Role, row.Compartment is null ? null : Compartment.Parse(row.Compartment),
             json is null ? null : Names.ScopeOf(json.Scope),
             json is null ? null : new RoleDefinition(Names.CategoryOf(json.Category), json.DisplayName, json.Operations,
-                new AssignableRoles(Names.SelectorOf(json.AssignsCompartment), json.AssignsPlatform, json.AssignableRoles), json.RequiresSecondFactor),
+                new AssignableRoles(Names.SelectorOf(json.AssignsCompartment), json.AssignsPlatform, json.AssignableRoles)),
             new Stamp(Utc(row.ProposedAt), Actor.Parse(row.ProposedBy)), Utc(row.ExpiresAt),
             row.ValidatedAt is { } validated ? new Stamp(Utc(validated), Actor.Parse(row.ValidatedBy!)) : null,
             row.RejectedAt is { } rejected ? new Stamp(Utc(rejected), Actor.Parse(row.RejectedBy!)) : null);
@@ -712,7 +715,7 @@ internal sealed class PendingActRepository(DbConnection connection, Func<DbTrans
     {
         var assignable = definition.Assignable ?? Stellaegis.Registry.AssignableRoles.None;
         return new DefinitionJson(Names.Of(scope), Names.Of(definition.Category), definition.DisplayName, definition.Operations.ToArray(),
-            Names.Of(assignable.Compartment), assignable.AllPlatform, assignable.Roles.ToArray(), definition.RequiresSecondFactor);
+            Names.Of(assignable.Compartment), assignable.AllPlatform, assignable.Roles.ToArray());
     }
 
     private static DateTimeOffset Utc(DateTime value) => new(DateTime.SpecifyKind(value, DateTimeKind.Utc));

@@ -134,6 +134,9 @@ public static class RegistryErrors
     /// <summary>The code of <see cref="NotValidator"/>.</summary>
     public const string NotValidatorCode = "Act.NotValidator";
 
+    /// <summary>The code of <see cref="CatalogInstallationOnly"/>.</summary>
+    public const string CatalogInstallationOnlyCode = "Catalog.InstallationOnly";
+
     /// <summary>The code of <see cref="UnknownOperation"/>.</summary>
     public const string UnknownOperationCode = "Catalog.UnknownOperation";
 
@@ -310,6 +313,10 @@ public static class RegistryErrors
     /// <summary>The author of the validation does not hold validations.write by a platform role.</summary>
     public static Error NotValidator()
         => Error.Forbidden(NotValidatorCode, "The author of the validation holds no platform role carrying validations.write.");
+
+    /// <summary>The catalogue is written by the installation only.</summary>
+    public static Error CatalogInstallationOnly()
+        => Error.Forbidden(CatalogInstallationOnlyCode, "The catalogue is written by the installation only.");
 
     /// <summary>The operation is not in the catalogue: no module declares it.</summary>
     public static Error UnknownOperation(string operation)

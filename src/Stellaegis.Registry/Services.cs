@@ -16,6 +16,12 @@ public interface ICatalog
 
     /// <summary>Every entry, by module then operation.</summary>
     Task<IReadOnlyList<CatalogEntry>> ListAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Makes operations require a second factor beyond their declaration — an act of the installation, which writes the
+    /// catalogue; never the reverse: what a module declares sensitive stays so. The flag survives a new recording.
+    /// </summary>
+    Task<Result> RequireSecondFactorAsync(IReadOnlyCollection<string> operations, Actor actor, CancellationToken cancellationToken = default);
 }
 
 /// <summary>
@@ -168,7 +174,7 @@ internal sealed class Catalog(ICatalogStore store) : ICatalog
     {
         Guard.NotNull(modules);
         var entries = modules
-            .SelectMany(module => module.Operations.Select(operation => new CatalogEntry(module.Name, operation.Identity, operation.Kind)))
+            .SelectMany(module => module.Operations.Select(operation => new CatalogEntry(module.Name, operation.Identity, operation.Kind, operation.RequiresSecondFactor)))
             .GroupBy(entry => entry.Operation, StringComparer.Ordinal)
             .Select(group => group.First())
             .ToList();
@@ -177,6 +183,20 @@ internal sealed class Catalog(ICatalogStore store) : ICatalog
     }
 
     public Task<IReadOnlyList<CatalogEntry>> ListAsync(CancellationToken cancellationToken = default) => store.ListAsync(cancellationToken);
+
+    public async Task<Result> RequireSecondFactorAsync(IReadOnlyCollection<string> operations, Actor actor, CancellationToken cancellationToken = default)
+    {
+        Guard.NotNull(operations);
+        Guard.NotNull(actor);
+        // The catalogue is the installation's: it hardens an operation, nobody else, and never weakens one.
+        if (!AssignmentRules.IsJob(actor))
+            return Result.Failure(RegistryErrors.CatalogInstallationOnly());
+        var known = (await store.ListAsync(cancellationToken).ConfigureAwait(false)).Select(entry => entry.Operation).ToHashSet(StringComparer.Ordinal);
+        if (operations.FirstOrDefault(operation => !known.Contains(operation)) is { } unknown)
+            return Result.Failure(RegistryErrors.UnknownOperation(unknown));
+        await store.HardenAsync(operations.Distinct(StringComparer.Ordinal).ToList(), cancellationToken).ConfigureAwait(false);
+        return Result.Success();
+    }
 }
 
 internal sealed class Roles(
@@ -364,9 +384,8 @@ internal sealed class Roles(
         return operations.FirstOrDefault(operation => !known.Contains(operation));
     }
 
-    // A platform role always requires a second factor (Fred, 2026-10-23): whoever holds the platform holds every
-    // compartment; the flag is set rather than refused, so that a declaration need not repeat it. The role of the owner
-    // keeps what it always is, whatever a declaration or a change gives it, but its display name and operations.
+    // The role of the owner keeps what it always is, whatever a declaration or a change gives it, but its display name
+    // and operations.
     private static RoleDefinition Normalize(string name, RoleScope scope, RoleDefinition definition) => name == RegistryRoles.Owner
         ? Normalize(RoleScope.Compartment, RegistryRoles.OwnerDefinition(definition))
         : Normalize(scope, definition);
@@ -378,16 +397,14 @@ internal sealed class Roles(
         Assignable = definition.Assignable is { } assignable
             ? assignable with { Roles = Guard.NotNull(assignable.Roles).Distinct(StringComparer.Ordinal).ToList() }
             : AssignableRoles.None,
-        RequiresSecondFactor = definition.RequiresSecondFactor || scope == RoleScope.Platform,
     };
 
     private static Role Build(string name, RoleScope scope, RoleDefinition definition, bool declared, Audit audit)
-        => new(name, scope, definition.Category, definition.DisplayName, declared, definition.Operations, definition.Assignable!, definition.RequiresSecondFactor, audit);
+        => new(name, scope, definition.Category, definition.DisplayName, declared, definition.Operations, definition.Assignable!, audit);
 
     private static bool Same(Role role, RoleDefinition definition)
         => role.Category == definition.Category
            && role.DisplayName == definition.DisplayName
-           && role.RequiresSecondFactor == definition.RequiresSecondFactor
            && role.Operations.ToHashSet(StringComparer.Ordinal).SetEquals(definition.Operations)
            && role.Assignable.SameAs(definition.Assignable!);
 
@@ -1184,6 +1201,6 @@ internal sealed class Ownership(
             return;
         var definition = RegistryRoles.OwnerDefinition(null);
         await roles.SaveAsync(new Role(RegistryRoles.Owner, RoleScope.Compartment, definition.Category, definition.DisplayName, Declared: true,
-            definition.Operations, definition.Assignable!, definition.RequiresSecondFactor, Audit.CreatedBy(actor, time.GetUtcNow())), cancellationToken).ConfigureAwait(false);
+            definition.Operations, definition.Assignable!, Audit.CreatedBy(actor, time.GetUtcNow())), cancellationToken).ConfigureAwait(false);
     }
 }

@@ -42,7 +42,7 @@ public sealed class OwnershipTests
         Assert.Equal(Jane, created.Value.Owner);
         Assert.Equal([RegistryRoles.Owner], await RolesOfAsync(host, Jane, Globex));
         var owner = (await host.Roles.GetAsync(RegistryRoles.Owner, Ct)).Value;
-        Assert.Equal((RoleCategory.Administration, CompartmentRoleSelector.All, true, true), (owner.Category, owner.Assignable.Compartment, owner.RequiresSecondFactor, owner.Declared));
+        Assert.Equal((RoleCategory.Administration, CompartmentRoleSelector.All, true), (owner.Category, owner.Assignable.Compartment, owner.Declared));
         Assert.Equal(["items.read"], owner.Operations);   // the declaration gives its operations, never its nature
         Assert.Equal(["items.read"], host.Sink.Last(RightsSinkCallKind.ReplaceUserGrants)!.Values);
         Assert.Contains(host.Events.Events, e => e is OwnershipChangedEvent { Owner: var o, Previous: null } && o == Jane);

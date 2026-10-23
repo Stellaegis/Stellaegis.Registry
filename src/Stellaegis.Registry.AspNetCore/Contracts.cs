@@ -105,18 +105,17 @@ public sealed record CatalogEntrySummary(string Module, string Operation, string
 /// <param name="Operations">The identities of its operations.</param>
 /// <param name="Category">What it is for: <c>administration</c> or <c>business</c>.</param>
 /// <param name="Assignable">The roles it lets its holder assign.</param>
-/// <param name="RequiresSecondFactor">Whether a second factor is required to exercise it; always for a platform role.</param>
 /// <param name="CreatedAt">When it was created.</param>
 /// <param name="CreatedBy">Who created it: the installation, for a declared role.</param>
 /// <param name="ModifiedAt">When it was last changed.</param>
 /// <param name="ModifiedBy">Who last changed it.</param>
 public sealed record RoleSummary(
     string Name, string Scope, string DisplayName, bool Declared, string[] Operations, string Category, AssignableRolesBody Assignable,
-    bool RequiresSecondFactor, DateTimeOffset CreatedAt, string CreatedBy, DateTimeOffset ModifiedAt, string ModifiedBy)
+    DateTimeOffset CreatedAt, string CreatedBy, DateTimeOffset ModifiedAt, string ModifiedBy)
 {
     internal static RoleSummary Of(Role role)
         => new(role.Name, Statuses.Of(role.Scope), role.DisplayName, role.Declared, role.Operations.ToArray(),
-            Statuses.Of(role.Category), AssignableRolesBody.Of(role.Assignable), role.RequiresSecondFactor,
+            Statuses.Of(role.Category), AssignableRolesBody.Of(role.Assignable),
             role.Audit.Created.At, role.Audit.Created.By.Value, role.Audit.Modified.At, role.Audit.Modified.By.Value);
 }
 
@@ -146,20 +145,18 @@ public sealed record AssignableRolesBody(string Compartment, bool Platform, stri
 /// <param name="DisplayName">What people call it.</param>
 /// <param name="Operations">The identities of its operations, each in the catalogue.</param>
 /// <param name="Assignable">The roles it lets its holder assign; none when absent.</param>
-/// <param name="RequiresSecondFactor">Whether a second factor is required to exercise it; forced for a platform role.</param>
 public sealed record CreateRoleRequest(
     string Name, string Scope, string Category, string DisplayName, string[] Operations,
-    AssignableRolesBody? Assignable = null, bool RequiresSecondFactor = false);
+    AssignableRolesBody? Assignable = null);
 
 /// <summary>The body of the change of a role: its definition, replaced as a whole.</summary>
 /// <param name="Category">What it is for: <c>administration</c> or <c>business</c>.</param>
 /// <param name="DisplayName">What people call it from now on.</param>
 /// <param name="Operations">The identities of its operations, each in the catalogue.</param>
 /// <param name="Assignable">The roles it lets its holder assign; none when absent.</param>
-/// <param name="RequiresSecondFactor">Whether a second factor is required to exercise it; forced for a platform role.</param>
 public sealed record UpdateRoleRequest(
     string Category, string DisplayName, string[] Operations,
-    AssignableRolesBody? Assignable = null, bool RequiresSecondFactor = false);
+    AssignableRolesBody? Assignable = null);
 
 /// <summary>A member of a compartment with their roles there, as the administration routes answer them.</summary>
 /// <param name="Subject">The member.</param>

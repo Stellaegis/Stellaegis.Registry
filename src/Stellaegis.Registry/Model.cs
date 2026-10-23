@@ -77,8 +77,7 @@ public static class RegistryRoles
         RoleCategory.Administration,
         declared?.DisplayName ?? "Owner",
         declared?.Operations ?? [],
-        AssignableRoles.Every(CompartmentRoleSelector.All),
-        RequiresSecondFactor: true);
+        AssignableRoles.Every(CompartmentRoleSelector.All));
 }
 
 /// <summary>The state of a user in the registry.</summary>
@@ -109,7 +108,22 @@ public sealed record UserRecord(string Subject, string Email, string DisplayName
 /// <param name="Module">The module that declares it.</param>
 /// <param name="Operation">Its identity, <c>target.name</c>.</param>
 /// <param name="Kind">What it does to the data.</param>
-public sealed record CatalogEntry(string Module, string Operation, OperationKind Kind);
+/// <param name="DeclaredSecondFactor">Whether the module declares it requires a second factor (<see cref="Primitives.Operation.RequiresSecondFactor"/>).</param>
+/// <param name="HardenedSecondFactor">Whether the installation made it require one, beyond its declaration — never the reverse.</param>
+public sealed record CatalogEntry(string Module, string Operation, OperationKind Kind, bool DeclaredSecondFactor = false, bool HardenedSecondFactor = false)
+{
+    /// <summary>Whether exercising it requires a session whose person used a second factor: declared so, or hardened.</summary>
+    public bool RequiresSecondFactor => DeclaredSecondFactor || HardenedSecondFactor;
+}
+
+/// <summary>
+/// An operation granted, as the registry hands it to the decision point: its identity, and whether exercising it
+/// requires a session whose person used a second factor — sensitive in itself in a compartment, always in the shared
+/// space, where every operation administers.
+/// </summary>
+/// <param name="Operation">Its identity, <c>target.name</c>.</param>
+/// <param name="RequiresSecondFactor">Whether the decision point refuses it to a session without a second factor in its <c>amr</c>.</param>
+public sealed record OperationGrant(string Operation, bool RequiresSecondFactor);
 
 /// <summary>The two scopes of a role, the two parallel models of the registry, never mixed.</summary>
 public enum RoleScope
@@ -195,21 +209,23 @@ public sealed record AssignableRoles(CompartmentRoleSelector Compartment, bool A
 /// <param name="Declared">Whether the application declares it in code: the installation re-applies it, and it cannot be deleted.</param>
 /// <param name="Operations">The identities of its operations, each in the catalogue.</param>
 /// <param name="Assignable">The roles it lets its holder assign.</param>
-/// <param name="RequiresSecondFactor">Whether its operations are granted only to a session that used a second factor; always, for a platform role.</param>
 /// <param name="Audit">Who created it — the installation, for a declared role — and who last changed it, and when.</param>
+/// <remarks>
+/// A role requires no second factor of its own: a role is powerful only by some of its operations, and the requirement
+/// belongs to the elementary operation (<see cref="Operation.RequiresSecondFactor"/>, <see cref="CatalogEntry"/>).
+/// </remarks>
 public sealed record Role(
     string Name, RoleScope Scope, RoleCategory Category, string DisplayName, bool Declared, IReadOnlyCollection<string> Operations,
-    AssignableRoles Assignable, bool RequiresSecondFactor, Audit Audit);
+    AssignableRoles Assignable, Audit Audit);
 
 /// <summary>What a role is, besides its name and its scope, which never change: what the creation and the change of a role take.</summary>
 /// <param name="Category">What it is for.</param>
 /// <param name="DisplayName">What people call it.</param>
 /// <param name="Operations">The identities of its operations, each in the catalogue.</param>
 /// <param name="Assignable">The roles it lets its holder assign; none unless given.</param>
-/// <param name="RequiresSecondFactor">Whether a second factor is required to exercise it; forced for a platform role.</param>
 public sealed record RoleDefinition(
     RoleCategory Category, string DisplayName, IReadOnlyCollection<string> Operations,
-    AssignableRoles? Assignable = null, bool RequiresSecondFactor = false);
+    AssignableRoles? Assignable = null);
 
 /// <summary>
 /// A role the application declares in code, which the installation records and re-applies: created when missing,
@@ -226,16 +242,15 @@ public sealed record RoleDefinition(
 /// <param name="DisplayName">What people call it.</param>
 /// <param name="Operations">Its operations, each declared by a module recorded in the catalogue.</param>
 /// <param name="Assignable">The roles it lets its holder assign; none unless given.</param>
-/// <param name="RequiresSecondFactor">Whether a second factor is required to exercise it; forced for a platform role.</param>
 public sealed record RoleDeclaration(
     string Name, RoleScope Scope, RoleCategory Category, string DisplayName, IReadOnlyCollection<Operation> Operations,
-    AssignableRoles? Assignable = null, bool RequiresSecondFactor = false)
+    AssignableRoles? Assignable = null)
 {
     /// <summary>The identities of the operations.</summary>
     public IReadOnlyCollection<string> OperationIdentities => Operations.Select(operation => operation.Identity).Distinct(StringComparer.Ordinal).ToList();
 
     /// <summary>The definition the declaration gives the role.</summary>
-    public RoleDefinition Definition => new(Category, DisplayName, OperationIdentities, Assignable, RequiresSecondFactor);
+    public RoleDefinition Definition => new(Category, DisplayName, OperationIdentities, Assignable);
 }
 
 /// <summary>The roles of a member in a compartment.</summary>

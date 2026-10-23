@@ -112,9 +112,11 @@ comment on column reg.users.modified_by is 'The actor of the last change; the cr
 -- longer declares stays grantable until someone decides otherwise.
 
 create table reg.operations (
-  operation  varchar(127) not null,
-  module     varchar(63)  not null,
-  kind       varchar(6)   not null,
+  operation               varchar(127) not null,
+  module                  varchar(63)  not null,
+  kind                    varchar(6)   not null,
+  declared_second_factor  boolean      not null,
+  hardened_second_factor  boolean      not null,
 
   constraint pk_operations primary key (operation),
   constraint ck_operations_operation check (
@@ -124,6 +126,8 @@ create table reg.operations (
 );
 
 comment on table  reg.operations            is 'The catalogue of the operations the modules declare, recorded by the installation. One row per operation.';
+comment on column reg.operations.declared_second_factor is 'Whether the module declares the operation requires a second factor: sensitive in itself, whoever is granted it.';
+comment on column reg.operations.hardened_second_factor is 'Whether the installation made it require one beyond its declaration; never unset by a recording.';
 comment on column reg.operations.operation  is 'The identity of the operation, target.name, as the module declares it.';
 comment on column reg.operations.kind       is 'What the operation does to the data: read, write or delete.';
 
@@ -136,8 +140,8 @@ create index ix_operations_module on reg.operations (module);
 -- not deleted. Its category says what it is for, administration or business, never deduced from its
 -- operations. It lets its holder assign the roles of its assignable list: compartment roles as a whole —
 -- none, the business ones, all —, every platform role, and the roles named in role_assignable_roles. A
--- compartment role never lets its holder assign a platform role; a platform role always requires a
--- second factor.
+-- compartment role never lets its holder assign a platform role. A role requires no second factor of
+-- its own: the requirement belongs to the elementary operation, in reg.operations.
 
 create table reg.roles (
   role                    varchar(63)  not null,
@@ -147,7 +151,6 @@ create table reg.roles (
   declared                boolean      not null,
   assigns_compartment     varchar(8)   not null,
   assigns_platform        boolean      not null,
-  requires_second_factor  boolean      not null,
   created_at    timestamptz  not null,
   created_by    varchar(128) not null,
   modified_at   timestamptz  not null,
@@ -159,7 +162,6 @@ create table reg.roles (
   constraint ck_roles_category check (category in ('administration', 'business')),
   constraint ck_roles_assigns_compartment check (assigns_compartment in ('none', 'business', 'all')),
   constraint ck_roles_assigns_platform check (scope = 'platform' or assigns_platform = false),
-  constraint ck_roles_requires_second_factor check (scope = 'compartment' or requires_second_factor = true),
   constraint ck_roles_display_name check (char_length(display_name) between 1 and 200),
   constraint ck_roles_created_by check (created_by ~ '^[^[:space:][:cntrl:]]([^[:cntrl:]]{0,126}[^[:space:][:cntrl:]])?$'),
   constraint ck_roles_modified_by check (modified_by ~ '^[^[:space:][:cntrl:]]([^[:cntrl:]]{0,126}[^[:space:][:cntrl:]])?$')
@@ -171,7 +173,6 @@ comment on column reg.roles.declared  is 'Whether the application declares the r
 comment on column reg.roles.category  is 'What the role is for: administration (who holds what) or business (what the modules do).';
 comment on column reg.roles.assigns_compartment is 'The compartment roles its holder may assign as a whole, those created later included: none, business, all.';
 comment on column reg.roles.assigns_platform    is 'Whether its holder may assign every platform role; a platform role only.';
-comment on column reg.roles.requires_second_factor is 'Whether its operations are granted only to a session that used a second factor; always for a platform role.';
 comment on column reg.roles.created_by  is 'The actor who created the role: the installation for a declared role, an operator otherwise.';
 comment on column reg.roles.modified_by is 'The actor of the last change; the creator, until a change.';
 

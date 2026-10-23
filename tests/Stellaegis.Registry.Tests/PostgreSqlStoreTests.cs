@@ -64,8 +64,8 @@ public sealed class PostgreSqlStoreTests(PostgreSqlFixture database) : IAsyncLif
     private async Task SeedAsync()
     {
         await Catalog.SaveAsync([new CatalogEntry("inventory", "items.read", OperationKind.Read), new CatalogEntry("inventory", "items.write", OperationKind.Write), new CatalogEntry("billing", "invoices.read", OperationKind.Read)], Ct);
-        await Roles.SaveAsync(new Role("reader", RoleScope.Compartment, RoleCategory.Business, "Reader", Declared: true, ["items.read", "invoices.read"], AssignableRoles.None, false, Seeded), Ct);
-        await Roles.SaveAsync(new Role("ops", RoleScope.Platform, RoleCategory.Administration, "Operations", Declared: false, ["items.write"], AssignableRoles.None, true, Seeded), Ct);
+        await Roles.SaveAsync(new Role("reader", RoleScope.Compartment, RoleCategory.Business, "Reader", Declared: true, ["items.read", "invoices.read"], AssignableRoles.None, Seeded), Ct);
+        await Roles.SaveAsync(new Role("ops", RoleScope.Platform, RoleCategory.Administration, "Operations", Declared: false, ["items.write"], AssignableRoles.None, Seeded), Ct);
         await Compartments.SaveAsync(new CompartmentRecord(Acme, "Acme SA", CompartmentStatus.Active, Seeded), Ct);
         await Compartments.SaveAsync(new CompartmentRecord(Globex, "Globex", CompartmentStatus.Active, Seeded), Ct);
         await Users.SaveAsync(new UserRecord(Jane, "jane@acme.test", "Jane Admin", UserStatus.Active, Seeded), Ct);
@@ -82,16 +82,16 @@ public sealed class PostgreSqlStoreTests(PostgreSqlFixture database) : IAsyncLif
     [InlineData("insert into reg.compartments values ('acme', 'x', 'active', now(), 'job:tests', now(), null)", "23502")]
     [InlineData("insert into reg.users values ('jane', 'jane@acme.test', 'Jane', 'active', now(), 'job:tests', now(), 'job:tests')", "23514")]
     [InlineData("insert into reg.users values ('3f2504e04f8941d39a0c0305e82c3301', 'jane@acme.test', 'Jane', 'blocked', now(), 'job:tests', now(), 'job:tests')", "23514")]
-    [InlineData("insert into reg.operations values ('items-read', 'inventory', 'read')", "23514")]
-    [InlineData("insert into reg.operations values ('items.read', 'Inventory', 'read')", "23514")]
-    [InlineData("insert into reg.operations values ('items.read', 'inventory', 'purge')", "23514")]
-    [InlineData("insert into reg.roles values ('tenant-administrator', 'compartment', 'administration', 'x', true, 'none', false, false, now(), 'job:tests', now(), 'job:tests')", "23514")]
-    [InlineData("insert into reg.roles values ('super__admin', 'platform', 'administration', 'x', true, 'all', true, true, now(), 'job:tests', now(), 'job:tests')", "23514")]
-    [InlineData("insert into reg.roles values ('reader', 'tenant', 'business', 'x', true, 'none', false, false, now(), 'job:tests', now(), 'job:tests')", "23514")]
-    [InlineData("insert into reg.roles values ('reader', 'compartment', 'boss', 'x', true, 'none', false, false, now(), 'job:tests', now(), 'job:tests')", "23514")]
-    [InlineData("insert into reg.roles values ('reader', 'compartment', 'business', 'x', true, 'some', false, false, now(), 'job:tests', now(), 'job:tests')", "23514")]
-    [InlineData("insert into reg.roles values ('reader', 'compartment', 'business', 'x', true, 'none', true, false, now(), 'job:tests', now(), 'job:tests')", "23514")]
-    [InlineData("insert into reg.roles values ('ops', 'platform', 'administration', 'x', true, 'none', false, false, now(), 'job:tests', now(), 'job:tests')", "23514")]
+    [InlineData("insert into reg.operations values ('items-read', 'inventory', 'read', false, false)", "23514")]
+    [InlineData("insert into reg.operations values ('items.read', 'Inventory', 'read', false, false)", "23514")]
+    [InlineData("insert into reg.operations values ('items.read', 'inventory', 'purge', false, false)", "23514")]
+    [InlineData("insert into reg.operations values ('items.read', 'inventory', 'read', null, false)", "23502")]
+    [InlineData("insert into reg.roles values ('tenant-administrator', 'compartment', 'administration', 'x', true, 'none', false, now(), 'job:tests', now(), 'job:tests')", "23514")]
+    [InlineData("insert into reg.roles values ('super__admin', 'platform', 'administration', 'x', true, 'all', true, now(), 'job:tests', now(), 'job:tests')", "23514")]
+    [InlineData("insert into reg.roles values ('reader', 'tenant', 'business', 'x', true, 'none', false, now(), 'job:tests', now(), 'job:tests')", "23514")]
+    [InlineData("insert into reg.roles values ('reader', 'compartment', 'boss', 'x', true, 'none', false, now(), 'job:tests', now(), 'job:tests')", "23514")]
+    [InlineData("insert into reg.roles values ('reader', 'compartment', 'business', 'x', true, 'some', false, now(), 'job:tests', now(), 'job:tests')", "23514")]
+    [InlineData("insert into reg.roles values ('reader', 'compartment', 'business', 'x', true, 'none', true, now(), 'job:tests', now(), 'job:tests')", "23514")]
     [InlineData("insert into reg.role_assignable_roles values ('nobody', 'nobody')", "23503")]
     [InlineData("insert into reg.pending_acts (act_id, kind, subject, role, proposed_at, proposed_by, expires_at) values (gen_random_uuid(), 'platform_role', null, 'ops', now(), 'job:tests', now() + interval '7 days')", "23514")]
     [InlineData("insert into reg.pending_acts (act_id, kind, role, proposed_at, proposed_by, expires_at) values (gen_random_uuid(), 'promotion', 'ops', now(), 'job:tests', now() + interval '7 days')", "23514")]
@@ -171,7 +171,7 @@ public sealed class PostgreSqlStoreTests(PostgreSqlFixture database) : IAsyncLif
         await SeedAsync();
 
         var changed = Seeded.ModifiedBy(Actor.Parse("3f2504e04f8941d39a0c0305e82c3301"), Now.AddHours(1));
-        await Roles.SaveAsync(new Role("reader", RoleScope.Compartment, RoleCategory.Business, "Reader of items", Declared: true, ["items.read", "items.read"], AssignableRoles.None, false, changed), Ct);
+        await Roles.SaveAsync(new Role("reader", RoleScope.Compartment, RoleCategory.Business, "Reader of items", Declared: true, ["items.read", "items.read"], AssignableRoles.None, changed), Ct);
         var role = (await Roles.GetAsync("reader", Ct))!;
         Assert.Equal("Reader of items", role.DisplayName);
         Assert.Equal(["items.read"], role.Operations);
@@ -223,7 +223,7 @@ public sealed class PostgreSqlStoreTests(PostgreSqlFixture database) : IAsyncLif
     public async Task The_holders_of_a_role_are_read_with_every_role_they_hold()
     {
         await SeedAsync();
-        await Roles.SaveAsync(new Role("accountant", RoleScope.Compartment, RoleCategory.Business, "Accountant", Declared: false, ["invoices.read"], AssignableRoles.None, false, Seeded), Ct);
+        await Roles.SaveAsync(new Role("accountant", RoleScope.Compartment, RoleCategory.Business, "Accountant", Declared: false, ["invoices.read"], AssignableRoles.None, Seeded), Ct);
         await Memberships.AddAsync(Jane, Acme, Granted, Ct);
         await Memberships.AddAsync(Jane, Globex, Granted, Ct);
         await Memberships.AddAsync(John, Globex, Granted, Ct);
@@ -253,7 +253,7 @@ public sealed class PostgreSqlStoreTests(PostgreSqlFixture database) : IAsyncLif
     public async Task The_operators_are_read_by_role_and_as_a_whole()
     {
         await SeedAsync();
-        await Roles.SaveAsync(new Role("super_admin", RoleScope.Platform, RoleCategory.Administration, "Platform administrator", Declared: true, ["items.read", "items.write"], AssignableRoles.None, true, Seeded), Ct);
+        await Roles.SaveAsync(new Role("super_admin", RoleScope.Platform, RoleCategory.Administration, "Platform administrator", Declared: true, ["items.read", "items.write"], AssignableRoles.None, Seeded), Ct);
         await Operators.AssignAsync(Jane, "super_admin", Granted, Ct);
         await Operators.AssignAsync(Jane, "ops", Granted, Ct);
         await Operators.AssignAsync(John, "ops", Granted, Ct);
@@ -300,9 +300,9 @@ public sealed class PostgreSqlStoreTests(PostgreSqlFixture database) : IAsyncLif
     public async Task A_role_keeps_its_category_its_assignable_roles_and_its_second_factor_and_a_role_named_there_is_not_deleted()
     {
         await SeedAsync();
-        await Roles.SaveAsync(new Role("clerk", RoleScope.Compartment, RoleCategory.Business, "Clerk", Declared: false, ["items.read"], AssignableRoles.None, false, Seeded), Ct);
+        await Roles.SaveAsync(new Role("clerk", RoleScope.Compartment, RoleCategory.Business, "Clerk", Declared: false, ["items.read"], AssignableRoles.None, Seeded), Ct);
         var manager = new Role("manager", RoleScope.Compartment, RoleCategory.Administration, "Manager", Declared: false, ["items.read", "items.write"],
-            new AssignableRoles(CompartmentRoleSelector.Business, false, ["manager", "clerk"]), true, Seeded);
+            new AssignableRoles(CompartmentRoleSelector.Business, false, ["manager", "clerk"]), Seeded);
         await Roles.SaveAsync(manager, Ct);
 
         var read = (await Roles.GetAsync("manager", Ct))!;
@@ -310,10 +310,7 @@ public sealed class PostgreSqlStoreTests(PostgreSqlFixture database) : IAsyncLif
         Assert.Equal(CompartmentRoleSelector.Business, read.Assignable.Compartment);
         Assert.False(read.Assignable.AllPlatform);
         Assert.Equal(["clerk", "manager"], read.Assignable.Roles.Order());
-        Assert.True(read.RequiresSecondFactor);
         Assert.Equal(["items.read", "items.write"], read.Operations.Order());   // the operations and the list do not multiply each other
-        var ops = Assert.Single(await Roles.ListAsync(RoleScope.Platform, Ct), role => role.Name == "ops");
-        Assert.True(ops.RequiresSecondFactor);
 
         // A role named in a list is not deleted; the list goes with its role.
         var refused = await Assert.ThrowsAsync<PostgresException>(() => Roles.DeleteAsync("clerk", Ct));
@@ -332,7 +329,7 @@ public sealed class PostgreSqlStoreTests(PostgreSqlFixture database) : IAsyncLif
         var initech = Compartment.Parse($"initech-{Guid.NewGuid():N}"[..20]);
         await Compartments.SaveAsync(new CompartmentRecord(initech, "Initech", CompartmentStatus.Active, Seeded), Ct);
         await Roles.SaveAsync(new Role(RegistryRoles.Owner, RoleScope.Compartment, RoleCategory.Administration, "Owner", Declared: true, [],
-            AssignableRoles.Every(CompartmentRoleSelector.All), true, Seeded), Ct);
+            AssignableRoles.Every(CompartmentRoleSelector.All), Seeded), Ct);
 
         Assert.True(await Compartments.SeatOwnerAsync(initech, Jane, Granted, Ct));
         Assert.False(await Compartments.SeatOwnerAsync(initech, John, Granted, Ct));
@@ -394,13 +391,13 @@ public sealed class PostgreSqlStoreTests(PostgreSqlFixture database) : IAsyncLif
     public async Task An_act_waits_with_its_definition_and_closes_once_and_a_rescue_seats_another_owner_at_once()
     {
         await SeedAsync();
-        var definition = new RoleDefinition(RoleCategory.Administration, "Manager", ["items.read"], new AssignableRoles(CompartmentRoleSelector.Business, false, ["reader"]), true);
+        var definition = new RoleDefinition(RoleCategory.Administration, "Manager", ["items.read"], new AssignableRoles(CompartmentRoleSelector.Business, false, ["reader"]));
         var act = new PendingAct(Guid.NewGuid(), PendingActKind.RoleDefinition, null, "manager", null, RoleScope.Compartment, definition, Granted, Now.AddDays(7));
         await Acts.InsertAsync(act, Ct);
 
         var read = (await Acts.GetAsync(act.ActId, Ct))!;
         Assert.Equal((PendingActKind.RoleDefinition, "manager", RoleScope.Compartment), (read.Kind, read.Role, read.Scope));
-        Assert.Equal((RoleCategory.Administration, "Manager", true), (read.Definition!.Category, read.Definition.DisplayName, read.Definition.RequiresSecondFactor));
+        Assert.Equal((RoleCategory.Administration, "Manager"), (read.Definition!.Category, read.Definition.DisplayName));
         Assert.Equal(CompartmentRoleSelector.Business, read.Definition.Assignable!.Compartment);
         Assert.Equal(["reader"], read.Definition.Assignable.Roles);
         Assert.True(await Acts.MarkValidatedAsync(act.ActId, Granted, Ct));
@@ -412,7 +409,7 @@ public sealed class PostgreSqlStoreTests(PostgreSqlFixture database) : IAsyncLif
         Assert.Contains(await Acts.ListAsync(Ct), a => a.ActId == rescue.ActId && a.Compartment == Acme);
 
         await Roles.SaveAsync(new Role(RegistryRoles.Owner, RoleScope.Compartment, RoleCategory.Administration, "Owner", Declared: true, [],
-            AssignableRoles.Every(CompartmentRoleSelector.All), true, Seeded), Ct);
+            AssignableRoles.Every(CompartmentRoleSelector.All), Seeded), Ct);
         Assert.True(await Compartments.SeatOwnerAsync(Acme, Jane, Granted, Ct));
         await Memberships.AssignRoleAsync(Jane, Acme, "reader", Granted, Ct);
         Assert.True(await Compartments.RescueOwnershipAsync(Acme, John, Granted, Ct));
@@ -421,5 +418,17 @@ public sealed class PostgreSqlStoreTests(PostgreSqlFixture database) : IAsyncLif
         Assert.Equal([RegistryRoles.Owner], members[John]);
         Assert.Equal(["reader"], members[Jane]);
         Assert.False(await Compartments.RescueOwnershipAsync(Compartment.Parse("nowhere"), John, Granted, Ct));
+    }
+
+    [Fact]
+    public async Task The_catalogue_keeps_what_a_module_declares_sensitive_and_what_the_installation_hardened()
+    {
+        await Catalog.SaveAsync([new CatalogEntry("payroll", "payroll.pay", OperationKind.Write, DeclaredSecondFactor: true), new CatalogEntry("payroll", "payroll.read", OperationKind.Read)], Ct);
+        await Catalog.HardenAsync(["payroll.read"], Ct);
+        await Catalog.SaveAsync([new CatalogEntry("payroll", "payroll.read", OperationKind.Read)], Ct);   // a new recording unsets nothing
+
+        var entries = (await Catalog.ListAsync(Ct)).Where(entry => entry.Module == "payroll").ToDictionary(entry => entry.Operation);
+        Assert.Equal((true, false, true), (entries["payroll.pay"].DeclaredSecondFactor, entries["payroll.pay"].HardenedSecondFactor, entries["payroll.pay"].RequiresSecondFactor));
+        Assert.Equal((false, true, true), (entries["payroll.read"].DeclaredSecondFactor, entries["payroll.read"].HardenedSecondFactor, entries["payroll.read"].RequiresSecondFactor));
     }
 }

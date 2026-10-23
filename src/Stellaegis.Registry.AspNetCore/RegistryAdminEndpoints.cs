@@ -327,7 +327,7 @@ public static class RegistryAdminEndpoints
     }
 
     // The definition a body gives a role, or the answer that refuses it.
-    private static bool TryDefine(string? category, string displayName, string[] operations, AssignableRolesBody? assignable, bool requiresSecondFactor, out RoleDefinition definition, out IResult invalid)
+    private static bool TryDefine(string? category, string displayName, string[] operations, AssignableRolesBody? assignable, out RoleDefinition definition, out IResult invalid)
     {
         definition = null!;
         invalid = null!;
@@ -342,7 +342,7 @@ public static class RegistryAdminEndpoints
             invalid = Invalid("An assignable list has a compartment selector — none, business or all —, a platform flag and an array of role names.");
             return false;
         }
-        definition = new RoleDefinition(parsed, displayName, operations, roles, requiresSecondFactor);
+        definition = new RoleDefinition(parsed, displayName, operations, roles);
         return true;
     }
 
@@ -377,7 +377,7 @@ public static class RegistryAdminEndpoints
                     return Invalid("A role has a name — an identifier —, a scope, a category, a display name and an array of operations.");
                 if (!Statuses.TryParseScope(request.Scope, out var scope))
                     return Invalid("A scope is compartment or platform.");
-                if (!TryDefine(request.Category, request.DisplayName, request.Operations, request.Assignable, request.RequiresSecondFactor, out var definition, out var invalid))
+                if (!TryDefine(request.Category, request.DisplayName, request.Operations, request.Assignable, out var definition, out var invalid))
                     return invalid;
                 var created = await service.CreateAsync(request.Name, scope, definition, Callers.ActorOf(http), ct);
                 Written(http, loggers, "created role {Role}", request.Name);
@@ -396,7 +396,7 @@ public static class RegistryAdminEndpoints
                     return NotARole(role);
                 if (request is null || string.IsNullOrWhiteSpace(request.DisplayName) || request.Operations is null)
                     return Invalid("A role has a category, a display name and an array of operations.");
-                if (!TryDefine(request.Category, request.DisplayName, request.Operations, request.Assignable, request.RequiresSecondFactor, out var definition, out var invalid))
+                if (!TryDefine(request.Category, request.DisplayName, request.Operations, request.Assignable, out var definition, out var invalid))
                     return invalid;
                 Written(http, loggers, "changed role {Role}", role);
                 var updated = await service.UpdateAsync(role, definition, Callers.ActorOf(http), ct);

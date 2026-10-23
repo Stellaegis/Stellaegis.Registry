@@ -166,8 +166,17 @@ internal sealed class InMemoryCatalogStore(InMemoryRegistryData data) : ICatalog
 
     public Task SaveAsync(IReadOnlyCollection<CatalogEntry> entries, CancellationToken cancellationToken = default)
     {
+        // A recording never unsets what the installation hardened.
         foreach (var entry in entries)
-            data.Catalog[entry.Operation] = entry;
+            data.Catalog.AddOrUpdate(entry.Operation, entry with { HardenedSecondFactor = false }, (_, existing) => entry with { HardenedSecondFactor = existing.HardenedSecondFactor });
+        return Task.CompletedTask;
+    }
+
+    public Task HardenAsync(IReadOnlyCollection<string> operations, CancellationToken cancellationToken = default)
+    {
+        foreach (var operation in operations)
+            if (data.Catalog.TryGetValue(operation, out var entry))
+                data.Catalog[operation] = entry with { HardenedSecondFactor = true };
         return Task.CompletedTask;
     }
 }
