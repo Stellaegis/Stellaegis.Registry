@@ -1,4 +1,5 @@
 using System.Data.Common;
+using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 using Stellaegis.Primitives;
 using Stellaegis.Primitives.Data;
@@ -21,25 +22,22 @@ public sealed class PostgreSqlCollection : ICollectionFixture<PostgreSqlFixture>
 /// at every run by the installation of the module, under that connection; the tests then connect under an
 /// ordinary role, <c>stellaegis_registry_app</c>, created once, as an application does.
 /// </summary>
-public sealed class PostgreSqlFixture : IAsyncLifetime
+public sealed class PostgreSqlFixture : IRegistryDatabaseFixture
 {
     private const string Variable = "STELLAEGIS_TEST_POSTGRESQL";
     private const string Database = "stellaegis_registry_tests";
     private const string AppRole = "stellaegis_registry_app";
 
-    /// <summary>The frame the database is installed for: the one of an enterprise host.</summary>
-    public static readonly ApplicationFrame Frame = ApplicationFrame.SingleCompartment("acme");
-
     /// <summary>The connection string of the installer, which owns the schema; empty without the variable.</summary>
     public string AdminConnectionString { get; private set; } = string.Empty;
 
-    /// <summary>The connection string the tests use, under the application's role.</summary>
+    /// <inheritdoc/>
     public string AppConnectionString { get; private set; } = string.Empty;
 
-    /// <summary>Why the database cannot be used, or <see langword="null"/> when it can.</summary>
+    /// <inheritdoc/>
     public string? Unavailable { get; private set; }
 
-    /// <summary>Skips the calling test when the database cannot be used.</summary>
+    /// <inheritdoc/>
     public void SkipWhenUnavailable() => Assert.SkipWhen(Unavailable is not null, Unavailable ?? string.Empty);
 
     /// <inheritdoc/>
@@ -86,7 +84,7 @@ public sealed class PostgreSqlFixture : IAsyncLifetime
                 await reset.ExecuteNonQueryAsync();
             }
 
-            await DatabaseLifecycle.InstallAsync([RegistryDatabase.Value], Frame, (_, ct) => OpenAsync(asApplication: false, ct), AppRole, Actor.Job("tests"));
+            await DatabaseLifecycle.InstallAsync([RegistryDatabase.Value], Fixtures.Frame, (_, ct) => OpenAsync(asApplication: false, ct), AppRole, Actor.Job("tests"));
         }
         catch (NpgsqlException e)
         {
@@ -97,7 +95,11 @@ public sealed class PostgreSqlFixture : IAsyncLifetime
     /// <inheritdoc/>
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 
-    /// <summary>Opens a connection to the test database, under the application's role or the installer's.</summary>
+    /// <inheritdoc/>
+    public void AddStores(IServiceCollection services)
+        => services.AddStellaegisRegistryPostgreSQL(options => options.ConnectionString = AppConnectionString);
+
+    /// <inheritdoc/>
     public async Task<DbConnection> OpenAsync(bool asApplication, CancellationToken cancellationToken)
     {
         var connection = new NpgsqlConnection(asApplication ? AppConnectionString : AdminConnectionString);
@@ -105,7 +107,7 @@ public sealed class PostgreSqlFixture : IAsyncLifetime
         return connection;
     }
 
-    /// <summary>Empties the eight tables, under the application's role, so that each test starts from nothing.</summary>
+    /// <inheritdoc/>
     public async Task ClearAsync(CancellationToken cancellationToken)
     {
         await using var connection = await OpenAsync(asApplication: true, cancellationToken);
@@ -120,7 +122,7 @@ public sealed class PostgreSqlFixture : IAsyncLifetime
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
-    /// <summary>Reads one value under the application's role: what a row keeps, read as the application reads it.</summary>
+    /// <inheritdoc/>
     public async Task<T?> ScalarAsApplicationAsync<T>(string sql, CancellationToken cancellationToken)
     {
         await using var connection = await OpenAsync(asApplication: true, cancellationToken);
@@ -129,7 +131,7 @@ public sealed class PostgreSqlFixture : IAsyncLifetime
         return (T?)await command.ExecuteScalarAsync(cancellationToken);
     }
 
-    /// <summary>Runs a statement under the application's role, as a script or a repair by hand would.</summary>
+    /// <inheritdoc/>
     public async Task ExecuteAsApplicationAsync(string sql, CancellationToken cancellationToken)
     {
         await using var connection = await OpenAsync(asApplication: true, cancellationToken);

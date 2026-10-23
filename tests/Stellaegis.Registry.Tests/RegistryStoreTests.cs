@@ -1,20 +1,73 @@
+using System.Data.Common;
 using Microsoft.Extensions.DependencyInjection;
-using Npgsql;
 using Stellaegis.Primitives;
-using Stellaegis.Registry.PostgreSQL;
+using Stellaegis.Primitives.Data;
 using static Stellaegis.Registry.Tests.Fixtures;
 
 namespace Stellaegis.Registry.Tests;
 
-/// <summary>
-/// The six stores against a real PostgreSQL, under the application's role: what the schema itself guarantees —
-/// grammars, statuses, the keys between the tables —, a role written whole or not at all, the catalogue
-/// re-recorded, the readings by role, and the record of the installation closed to the application.
-/// </summary>
-[Collection(PostgreSqlCollection.Name)]
-public sealed class PostgreSqlStoreTests(PostgreSqlFixture database) : IAsyncLifetime
+/// <summary>A database of an engine for the store tests, installed by the installation of the module.</summary>
+public interface IRegistryDatabaseFixture : IAsyncLifetime
 {
-    private static CancellationToken Ct => TestContext.Current.CancellationToken;
+    /// <summary>The connection string a host is configured with.</summary>
+    string AppConnectionString { get; }
+
+    /// <summary>Why the database cannot be used, or <see langword="null"/> when it can.</summary>
+    string? Unavailable { get; }
+
+    /// <summary>Skips the calling test when the database cannot be used.</summary>
+    void SkipWhenUnavailable();
+
+    /// <summary>Registers the stores of the engine, connecting under the application's role.</summary>
+    void AddStores(IServiceCollection services);
+
+    /// <summary>Opens a connection to the test database, under the application's role or the installer's.</summary>
+    Task<DbConnection> OpenAsync(bool asApplication, CancellationToken cancellationToken);
+
+    /// <summary>Empties the tables, under the application's role, so that each test starts from nothing.</summary>
+    Task ClearAsync(CancellationToken cancellationToken);
+
+    /// <summary>Reads one value under the application's role: what a row keeps, read as the application reads it.</summary>
+    Task<T?> ScalarAsApplicationAsync<T>(string sql, CancellationToken cancellationToken);
+
+    /// <summary>Runs a statement under the application's role, as a script or a repair by hand would.</summary>
+    Task ExecuteAsApplicationAsync(string sql, CancellationToken cancellationToken);
+}
+
+/// <summary>What the schema refuses, whatever the engine says it with.</summary>
+public enum Refusal
+{
+    /// <summary>A value its check refuses.</summary>
+    Check,
+
+    /// <summary>A row naming one that does not exist, or one still named elsewhere.</summary>
+    MissingKey,
+
+    /// <summary>A required value missing.</summary>
+    NotNull,
+
+    /// <summary>A key or a unique value already taken.</summary>
+    Duplicate,
+
+    /// <summary>A right the role does not hold.</summary>
+    PermissionDenied,
+}
+
+/// <summary>
+/// The stores against a real engine, under the application's role: what the schema itself guarantees — the keys
+/// between the tables —, a role written whole or not at all, the catalogue re-recorded, the readings by role, and
+/// the record of the installation closed to the application. Every engine runs the same scenarios; a derived class
+/// says how its engine refuses, and checks its own grammars.
+/// </summary>
+public abstract class RegistryStoreTests(IRegistryDatabaseFixture database) : IAsyncLifetime
+{
+    /// <summary>Asserts that <paramref name="write"/> fails as the engine says <paramref name="refusal"/>.</summary>
+    protected abstract Task AssertRefusedAsync(Func<Task> write, Refusal refusal);
+
+    /// <summary>The declaration of the database of the engine.</summary>
+    protected abstract ModuleDatabase Declaration { get; }
+
+    protected static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     private TestHost? _host;
 
@@ -23,7 +76,7 @@ public sealed class PostgreSqlStoreTests(PostgreSqlFixture database) : IAsyncLif
         get
         {
             database.SkipWhenUnavailable();
-            return _host ??= new TestHost(stores: services => services.AddStellaegisRegistryPostgreSQL(options => options.ConnectionString = database.AppConnectionString));
+            return _host ??= new TestHost(stores: database.AddStores);
         }
     }
 
@@ -50,6 +103,7 @@ public sealed class PostgreSqlStoreTests(PostgreSqlFixture database) : IAsyncLif
     public ValueTask DisposeAsync()
     {
         _host?.Dispose();
+        GC.SuppressFinalize(this);
         return ValueTask.CompletedTask;
     }
 
@@ -74,53 +128,13 @@ public sealed class PostgreSqlStoreTests(PostgreSqlFixture database) : IAsyncLif
 
     // ── What the schema guarantees ───────────────────────────────────────────
 
-    [Theory]
-    [InlineData("insert into reg.compartments values ('Acme', 'x', 'active', now(), 'job:tests', now(), 'job:tests')", "23514")]
-    [InlineData("insert into reg.compartments values ('ac--me', 'x', 'active', now(), 'job:tests', now(), 'job:tests')", "23514")]
-    [InlineData("insert into reg.compartments values ('acme', 'x', 'gone', now(), 'job:tests', now(), 'job:tests')", "23514")]
-    [InlineData("insert into reg.compartments values ('acme', 'x', 'active', now(), ' ', now(), 'job:tests')", "23514")]
-    [InlineData("insert into reg.compartments values ('acme', 'x', 'active', now(), 'job:tests', now(), null)", "23502")]
-    [InlineData("insert into reg.users values ('jane', 'jane@acme.test', 'Jane', 'active', now(), 'job:tests', now(), 'job:tests')", "23514")]
-    [InlineData("insert into reg.users values ('3f2504e04f8941d39a0c0305e82c3301', 'jane@acme.test', 'Jane', 'blocked', now(), 'job:tests', now(), 'job:tests')", "23514")]
-    [InlineData("insert into reg.operations values ('items-read', 'inventory', 'read', false, false)", "23514")]
-    [InlineData("insert into reg.operations values ('items.read', 'Inventory', 'read', false, false)", "23514")]
-    [InlineData("insert into reg.operations values ('items.read', 'inventory', 'purge', false, false)", "23514")]
-    [InlineData("insert into reg.operations values ('items.read', 'inventory', 'read', null, false)", "23502")]
-    [InlineData("insert into reg.roles values ('tenant-administrator', 'compartment', 'administration', 'x', true, 'none', false, now(), 'job:tests', now(), 'job:tests')", "23514")]
-    [InlineData("insert into reg.roles values ('super__admin', 'platform', 'administration', 'x', true, 'all', true, now(), 'job:tests', now(), 'job:tests')", "23514")]
-    [InlineData("insert into reg.roles values ('reader', 'tenant', 'business', 'x', true, 'none', false, now(), 'job:tests', now(), 'job:tests')", "23514")]
-    [InlineData("insert into reg.roles values ('reader', 'compartment', 'boss', 'x', true, 'none', false, now(), 'job:tests', now(), 'job:tests')", "23514")]
-    [InlineData("insert into reg.roles values ('reader', 'compartment', 'business', 'x', true, 'some', false, now(), 'job:tests', now(), 'job:tests')", "23514")]
-    [InlineData("insert into reg.roles values ('reader', 'compartment', 'business', 'x', true, 'none', true, now(), 'job:tests', now(), 'job:tests')", "23514")]
-    [InlineData("insert into reg.role_assignable_roles values ('nobody', 'nobody')", "23503")]
-    [InlineData("insert into reg.pending_acts (act_id, kind, subject, role, proposed_at, proposed_by, expires_at) values (gen_random_uuid(), 'platform_role', null, 'ops', now(), 'job:tests', now() + interval '7 days')", "23514")]
-    [InlineData("insert into reg.pending_acts (act_id, kind, role, proposed_at, proposed_by, expires_at) values (gen_random_uuid(), 'promotion', 'ops', now(), 'job:tests', now() + interval '7 days')", "23514")]
-    [InlineData("insert into reg.compartments values ('acme', 'x', 'active', now(), 'job:tests', now(), 'job:tests', 'jane')", "23514")]
-    [InlineData("insert into reg.invitations (invitation_id, token_hash, compartment, email, designates_owner, delivery, issued_at, issued_by, expires_at) values (gen_random_uuid(), 'ZZ', 'acme', 'a@b.c', false, 'email', now(), 'job:tests', now() + interval '1 day')", "23514")]
-    [InlineData("insert into reg.invitations (invitation_id, token_hash, compartment, email, designates_owner, delivery, issued_at, issued_by, expires_at) values (gen_random_uuid(), repeat('a', 64), 'acme', 'A@b.c', false, 'email', now(), 'job:tests', now() + interval '1 day')", "23514")]
-    [InlineData("insert into reg.invitations (invitation_id, token_hash, compartment, email, designates_owner, delivery, issued_at, issued_by, expires_at) values (gen_random_uuid(), repeat('a', 64), 'acme', 'a@b.c', false, 'sms', now(), 'job:tests', now() + interval '1 day')", "23514")]
-    [InlineData("insert into reg.ownership_transfers values ('acme', '3f2504e04f8941d39a0c0305e82c3301', '3f2504e04f8941d39a0c0305e82c3301', now(), 'job:tests', now() + interval '7 days')", "23514")]
-    [InlineData("insert into reg.ownership_transfers values ('nowhere', '3f2504e04f8941d39a0c0305e82c3301', '8d1e3b2a6c4f4a8e9b1d2f3e4a5b6c7d', now(), 'job:tests', now() + interval '7 days')", "23503")]
-    [InlineData("insert into reg.role_operations values ('nobody', 'items.read')", "23503")]
-    [InlineData("insert into reg.memberships values ('3f2504e04f8941d39a0c0305e82c3301', 'nowhere', now(), 'job:tests')", "23503")]
-    [InlineData("insert into reg.operator_roles values ('3f2504e04f8941d39a0c0305e82c3301', 'nobody', now(), 'job:tests')", "23503")]
-    public async Task The_schema_refuses_what_the_registry_would_never_produce(string sql, string sqlState)
-    {
-        database.SkipWhenUnavailable();
-
-        var exception = await Assert.ThrowsAsync<PostgresException>(() => database.ExecuteAsApplicationAsync(sql, Ct));
-
-        Assert.Equal(sqlState, exception.SqlState);
-    }
-
     [Fact]
     public async Task A_member_role_needs_the_membership_and_goes_with_it()
     {
         await SeedAsync();
 
         // Assigning a role to someone who is not a member is refused by the schema (the service refuses it before).
-        var exception = await Assert.ThrowsAsync<PostgresException>(() => Memberships.AssignRoleAsync(Jane, Acme, "reader", Granted, Ct));
-        Assert.Equal("23503", exception.SqlState);
+        await AssertRefusedAsync(() => Memberships.AssignRoleAsync(Jane, Acme, "reader", Granted, Ct), Refusal.MissingKey);
 
         await Memberships.AddAsync(Jane, Acme, Granted, Ct);
         await Memberships.AssignRoleAsync(Jane, Acme, "reader", Granted, Ct);
@@ -143,8 +157,8 @@ public sealed class PostgreSqlStoreTests(PostgreSqlFixture database) : IAsyncLif
         await Memberships.AssignRoleAsync(Jane, Acme, "reader", Granted, Ct);
         await Operators.AssignAsync(John, "ops", Granted, Ct);
 
-        Assert.Equal("23503", (await Assert.ThrowsAsync<PostgresException>(() => Roles.DeleteAsync("reader", Ct))).SqlState);
-        Assert.Equal("23503", (await Assert.ThrowsAsync<PostgresException>(() => Roles.DeleteAsync("ops", Ct))).SqlState);
+        await AssertRefusedAsync(() => Roles.DeleteAsync("reader", Ct), Refusal.MissingKey);
+        await AssertRefusedAsync(() => Roles.DeleteAsync("ops", Ct), Refusal.MissingKey);
 
         await Operators.UnassignAsync(John, "ops", Ct);
         await Roles.DeleteAsync("ops", Ct);
@@ -157,10 +171,8 @@ public sealed class PostgreSqlStoreTests(PostgreSqlFixture database) : IAsyncLif
     {
         database.SkipWhenUnavailable();
 
-        var exception = await Assert.ThrowsAsync<PostgresException>(() => database.ExecuteAsApplicationAsync(
-            $"insert into {RegistryDatabase.Value.MigrationsTable} (version, script_name, checksum, applied_by) values (9, 'x', 'x', 'x')", Ct));
-
-        Assert.Equal("42501", exception.SqlState);
+        await AssertRefusedAsync(() => database.ExecuteAsApplicationAsync(
+            $"insert into {Declaration.MigrationsTable} (version, script_name, checksum, applied_by) values (9, 'x', 'x', 'x')", Ct), Refusal.PermissionDenied);
     }
 
     // ── A role written whole or not at all ───────────────────────────────────
@@ -178,8 +190,7 @@ public sealed class PostgreSqlStoreTests(PostgreSqlFixture database) : IAsyncLif
         Assert.Equal(changed, role.Audit);   // the creation kept, the change recorded, both with their actor
 
         // An operation out of the catalogue fails the save, and the previous operations stay in place.
-        var exception = await Assert.ThrowsAsync<PostgresException>(() => Roles.SaveAsync(role with { Operations = ["items.read", "items.ship"] }, Ct));
-        Assert.Equal("23503", exception.SqlState);
+        await AssertRefusedAsync(() => Roles.SaveAsync(role with { Operations = ["items.read", "items.ship"] }, Ct), Refusal.MissingKey);
         Assert.Equal(["items.read"], (await Roles.GetAsync("reader", Ct))!.Operations);
 
         await Roles.SaveAsync(role with { Operations = [] }, Ct);
@@ -297,7 +308,7 @@ public sealed class PostgreSqlStoreTests(PostgreSqlFixture database) : IAsyncLif
     }
 
     [Fact]
-    public async Task A_role_keeps_its_category_its_assignable_roles_and_its_second_factor_and_a_role_named_there_is_not_deleted()
+    public async Task A_role_keeps_its_category_and_its_assignable_roles_and_a_role_named_there_is_not_deleted()
     {
         await SeedAsync();
         await Roles.SaveAsync(new Role("clerk", RoleScope.Compartment, RoleCategory.Business, "Clerk", Declared: false, ["items.read"], AssignableRoles.None, Seeded), Ct);
@@ -313,8 +324,7 @@ public sealed class PostgreSqlStoreTests(PostgreSqlFixture database) : IAsyncLif
         Assert.Equal(["items.read", "items.write"], read.Operations.Order());   // the operations and the list do not multiply each other
 
         // A role named in a list is not deleted; the list goes with its role.
-        var refused = await Assert.ThrowsAsync<PostgresException>(() => Roles.DeleteAsync("clerk", Ct));
-        Assert.Equal("23503", refused.SqlState);
+        await AssertRefusedAsync(() => Roles.DeleteAsync("clerk", Ct), Refusal.MissingKey);
         await Roles.SaveAsync(manager with { Assignable = AssignableRoles.Every(CompartmentRoleSelector.All) }, Ct);
         Assert.Empty((await Roles.GetAsync("manager", Ct))!.Assignable.Roles);
         await Roles.DeleteAsync("clerk", Ct);

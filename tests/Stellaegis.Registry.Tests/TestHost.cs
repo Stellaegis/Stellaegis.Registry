@@ -120,6 +120,9 @@ internal static class Fixtures
     /// <summary>The actor of the writes of the tests: the installation of a test, as an installation names itself.</summary>
     public static readonly Actor By = Actor.Job("tests");
 
+    /// <summary>The frame the databases of the tests are installed for: the one of an enterprise host.</summary>
+    public static readonly ApplicationFrame Frame = ApplicationFrame.SingleCompartment("acme");
+
     public static readonly Compartment Acme = Compartment.Parse("acme");
     public static readonly Compartment Globex = Compartment.Parse("globex");
     public static readonly string Jane = Guid.Parse("3f2504e0-4f89-41d3-9a0c-0305e82c3301").ToString("N");
