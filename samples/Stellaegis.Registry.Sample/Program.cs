@@ -4,13 +4,16 @@
 // are decided per operation (Stellaegis.Access); and what gives those rights their meaning — the catalogue, the
 // roles, the memberships — is the registry, this repository. The host composes the four, with a module of its own.
 //
-//   dotnet run -- install --admin-email admin@acme.test --admin-password 'Correct-Horse-9'
+//   dotnet run -- install --admin-email admin@acme.test
 //       creates the database and the application's role if missing, installs the four schemas under the
 //       administration connection, records the catalogue of the operations the modules declare, re-applies the
-//       declared roles, creates the compartment, creates the first administrator in Identity and records them in
-//       the registry as the administrator of the platform and of the compartment — which the registry projects
-//       into Access —, declares the public client of the desktop and provisions the credentials of the inventory.
-//       Run again, it changes nothing.
+//       declared roles, creates the first administrator in Identity without a password and records them in the
+//       registry, creates the compartment with them as its owner, makes them administrator of the platform —
+//       which the registry projects into Access —, declares the public client of the desktop, provisions the
+//       credentials of the inventory, and prints the administrator's activation link. Run again, it changes nothing.
+//   dotnet run -- validate [<act-id> [--reject]]
+//       lists the sensitive acts waiting — a platform role, the definition of a role, a rescue —, or validates or
+//       rejects one, under the administration connection: the second channel a stolen web access does not reach.
 //   dotnet run
 //       verifies the four schemas under the application's role, then serves.
 //
@@ -38,6 +41,8 @@ using Stellaegis.Registry.Sample;
 
 if (args.Length > 0 && args[0] == "install")
     return await Install.RunAsync(args[1..]);
+if (args.Length > 0 && args[0] == "validate")
+    return await Validate.RunAsync(args[1..]);
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -76,8 +81,9 @@ builder.Services.AddStellaegisAccessPostgreSQL(builder.Configuration);
 builder.Services.AddStellaegisAccessPolicies();
 
 // 4. The registry, on the same PostgreSQL (Stellaegis:Registry:PostgreSQL): the catalogue, the roles, the
-//    memberships, the operators; its administration routes; and where the effective rights it computes go — the
-//    projection of Access, in process, through one adapter of five lines.
+//    memberships, the owners, the operators, the acts waiting for their validation; its administration routes; and
+//    where the effective rights it computes go — the projection of Access, in process, through one adapter of five
+//    lines.
 builder.Services.AddStellaegisRegistryPostgreSQL(builder.Configuration);
 builder.Services.AddStellaegisRegistryAdministration();
 builder.Services.AddStellaegisRightsSink<AccessRightsSink>();

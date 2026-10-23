@@ -1,8 +1,10 @@
 using System.Data.Common;
 using Microsoft.Extensions.Hosting.Internal;
+using Microsoft.Extensions.Options;
 using Npgsql;
 using Stellaegis.Access.PostgreSQL;
 using Stellaegis.Identity;
+using Stellaegis.Identity.AspNetCore;
 using Stellaegis.Identity.PostgreSQL;
 using Stellaegis.Issuer;
 using Stellaegis.Issuer.PostgreSQL;
@@ -23,15 +25,21 @@ namespace Stellaegis.Registry.Sample;
 ///   the instance, a deployment splitting them by configuration alone;</item>
 ///   <item>the catalogue of the registry recorded from what the modules declare, and the roles the application
 ///   declares re-applied;</item>
-///   <item>the compartment of the company;</item>
-///   <item>the first administrator, created in Identity — whose identifier comes back —, recorded in the registry,
-///   made administrator of the platform and of the compartment: the registry projects their rights into Access;</item>
+///   <item>the first administrator, created in Identity without a password — whose identifier comes back —, and
+///   recorded in the registry;</item>
+///   <item>the compartment of the company, created with the administrator seated as its owner, in one gesture — the
+///   gesture of a company installing its own system, which knows who holds it; a host of several compartments
+///   installs its operators only, and seats the owner of each compartment later, by a designation;</item>
+///   <item>the administrator made administrator of the platform: the registry projects their rights into Access;</item>
 ///   <item>the public client of the desktop declared, and the credentials of the inventory module provisioned, in
 ///   the issuer.</item>
 /// </list>
-/// Every write names its actor, <c>job:install</c>. Run again, it changes nothing.
+/// Every write names its actor, <c>job:install</c>. The administrator has no password: the installation prints its
+/// activation link, which the installer opens once the application runs, and chooses the password there — no
+/// password goes through the command line, its history or the list of processes. Run again, it changes nothing; an
+/// administrator still waiting for its activation gets a new link.
 /// <code>
-/// dotnet run -- install --admin-email admin@acme.test --admin-password 'Correct-Horse-9' [--display-name Admin]
+/// dotnet run -- install --admin-email admin@acme.test [--display-name Admin]
 /// </code>
 /// </summary>
 public static class Install
@@ -45,23 +53,14 @@ public static class Install
     public static async Task<int> RunAsync(string[] args)
     {
         var email = Argument(args, "--admin-email");
-        var password = Argument(args, "--admin-password");
         var displayName = Argument(args, "--display-name") ?? "Administrator";
-        if (email is null || password is null)
+        if (email is null)
         {
-            Console.Error.WriteLine("usage: install --admin-email <email> --admin-password <password> [--display-name <name>]");
+            Console.Error.WriteLine("usage: install --admin-email <email> [--display-name <name>]");
             return 2;
         }
 
-        // The example is a development host: its issuer signs with development certificates, which only the
-        // Development environment accepts. The installer reads the same configuration as the application.
-        var environment = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ?? "Development";
-        var configuration = new ConfigurationBuilder()
-            .AddJsonFile("appsettings.json", optional: false)
-            .AddJsonFile($"appsettings.{environment}.json", optional: true)
-            .AddUserSecrets<LoggingMailer>(optional: true)
-            .AddEnvironmentVariables()
-            .Build();
+        var (environment, configuration) = SampleConfiguration.Load();
 
         // The application's connection string names the database and the role the application runs under; the
         // installer's connection string reaches the server under a role that may create both.
@@ -99,7 +98,7 @@ public static class Install
         }
 
         // 2. The four schemas, under the installer, which owns them; the application's role granted its rights.
-        var adminOnDatabase = new NpgsqlConnectionStringBuilder(installer.ConnectionString) { Database = database }.ConnectionString;
+        var adminOnDatabase = SampleConfiguration.AdministrationConnectionString(configuration);
         var report = await DatabaseLifecycle.InstallAsync(
             [IdentityDatabase.Value, IssuerDatabase.Value, AccessDatabase.Value, RegistryDatabase.Value], SampleFrame.Value,
             async (_, ct) => { DbConnection c = new NpgsqlConnection(adminOnDatabase); await c.OpenAsync(ct); return c; },
@@ -137,41 +136,32 @@ public static class Install
             Console.Error.WriteLine($"The roles were not declared: {declared.Error}");
             return 1;
         }
-        Console.WriteLine($"Roles declared: {SampleRoles.TenantAdministrator}, {SampleRoles.ShopManager}, {SampleRoles.Operator} in the compartments; {SampleRoles.SuperAdmin} on the platform.");
+        Console.WriteLine($"Roles declared: {RegistryRoles.Owner}, {SampleRoles.TenantAdministrator}, {SampleRoles.ShopManager}, {SampleRoles.Operator} in the compartments; {SampleRoles.SuperAdmin} on the platform.");
 
-        // 4. The compartment of the company.
-        var compartments = scope.ServiceProvider.GetRequiredService<ICompartments>();
-        var created = await compartments.CreateAsync(SampleFrame.Company, "Acme SA", Installer);
-        if (created.IsSuccess)
-            Console.WriteLine($"Compartment {SampleFrame.Company} created.");
-        else if (created.Error?.Code == RegistryErrors.CompartmentExistsCode)
-            Console.WriteLine($"Compartment {SampleFrame.Company} exists already.");
-        else
-        {
-            Console.Error.WriteLine($"The compartment was not created: {created.Error}");
-            return 1;
-        }
-
-        // 5. The first administrator: created in Identity, whose identifier comes back; recorded in the registry;
-        //    administrator of the platform and of the compartment. Each grant goes through the sink into Access.
-        var accounts = scope.ServiceProvider.GetRequiredService<AccountAdministrationService>();
-        var account = await accounts.CreateAsync(email, displayName, password, Installer);
+        // 4. The first administrator, without a password: created in Identity, whose identifier comes back, and
+        //    recorded in the registry. Its activation link is handed to the installer, at the end.
+        var administration = scope.ServiceProvider.GetRequiredService<AccountAdministrationService>();
+        string? token = null;
         string subject;
+        var account = await administration.CreateAsync(email, displayName, TokenDelivery.Hand, Installer);
         if (account.IsSuccess)
         {
-            subject = account.Value.ToString("N");
+            subject = account.Value.UserUniqueId.ToString("N");
+            token = account.Value.ActivationToken;
             Console.WriteLine($"Administrator {email} created in Identity, {subject}.");
         }
         else if (account.Error?.Code == IdentityErrors.EmailTakenCode)
         {
-            var existing = await scope.ServiceProvider.GetRequiredService<IAuthUserStore>().GetByEmailAsync(email);
+            var existing = await scope.ServiceProvider.GetRequiredService<IAuthUserStore>().GetByEmailAsync(Emails.Normalize(email));
             if (existing is null)
             {
                 Console.Error.WriteLine($"Administrator {email} exists in Identity and cannot be read back.");
                 return 1;
             }
             subject = existing.UserUniqueId.ToString("N");
-            Console.WriteLine($"Administrator {email} exists already in Identity, {subject}.");
+            if (!existing.IsActivated)
+                token = (await administration.IssueActivationAsync(existing.UserUniqueId, TokenDelivery.Hand, Installer)).Value?.Token;
+            Console.WriteLine($"Administrator {email} exists already in Identity, {subject}{(existing.IsActivated ? ", and is active" : "")}.");
         }
         else
         {
@@ -179,31 +169,51 @@ public static class Install
             return 1;
         }
 
-        var directory = scope.ServiceProvider.GetRequiredService<IUserDirectory>();
-        var recorded = await directory.RecordAsync(subject, email, displayName, Installer);
+        var recorded = await scope.ServiceProvider.GetRequiredService<IUserDirectory>().RecordAsync(subject, email, displayName, Installer);
         if (recorded.IsFailure)
         {
             Console.Error.WriteLine($"The administrator was not recorded in the registry: {recorded.Error}");
             return 1;
         }
-        var operators = scope.ServiceProvider.GetRequiredService<IOperators>();
-        var memberships = scope.ServiceProvider.GetRequiredService<IMemberships>();
-        foreach (var result in new[]
+
+        // 5. The compartment of the company, its owner seated in the same gesture: the owner becomes its first member
+        //    and holds the role of the owner. A compartment found without one — an installation interrupted — gets it.
+        var compartments = scope.ServiceProvider.GetRequiredService<ICompartments>();
+        var found = await compartments.GetAsync(SampleFrame.Company);
+        if (found.IsFailure)
         {
-            await operators.AssignAsync(subject, SampleRoles.SuperAdmin, Installer),
-            await memberships.AddAsync(subject, SampleFrame.Company, Installer),
-            await memberships.AssignRoleAsync(subject, SampleFrame.Company, SampleRoles.TenantAdministrator, Installer),
-        })
-        {
-            if (result.IsFailure)
+            var created = await compartments.CreateAsync(SampleFrame.Company, "Acme SA", subject, Installer);
+            if (created.IsFailure)
             {
-                Console.Error.WriteLine($"The administrator's rights were not recorded: {result.Error}");
+                Console.Error.WriteLine($"The compartment was not created: {created.Error}");
                 return 1;
             }
+            Console.WriteLine($"Compartment {SampleFrame.Company} created, owned by the administrator.");
         }
-        Console.WriteLine($"Administrator recorded in the registry: {SampleRoles.SuperAdmin} on the platform, {SampleRoles.TenantAdministrator} in {SampleFrame.Company} — projected into Access.");
+        else if (found.Value.Owner is null)
+        {
+            var seated = await scope.ServiceProvider.GetRequiredService<IOwnership>().SeatAsync(SampleFrame.Company, subject, Installer);
+            if (seated.IsFailure)
+            {
+                Console.Error.WriteLine($"The owner of {SampleFrame.Company} was not seated: {seated.Error}");
+                return 1;
+            }
+            Console.WriteLine($"Compartment {SampleFrame.Company} exists already: the administrator seated as its owner.");
+        }
+        else
+            Console.WriteLine($"Compartment {SampleFrame.Company} exists already, owned by {found.Value.Owner}.");
 
-        // 6. The clients of the issuer: the native client of the desktop, and the credentials of the inventory
+        // 6. The administrator of the platform: applied at once, the installation being the one actor whose platform
+        //    roles wait for no validation. The grant goes through the sink into Access.
+        var assigned = await scope.ServiceProvider.GetRequiredService<IOperators>().AssignAsync(subject, SampleRoles.SuperAdmin, Installer);
+        if (assigned.IsFailure)
+        {
+            Console.Error.WriteLine($"The administrator's platform role was not recorded: {assigned.Error}");
+            return 1;
+        }
+        Console.WriteLine($"Administrator recorded in the registry: {RegistryRoles.Owner} of {SampleFrame.Company}, {SampleRoles.SuperAdmin} on the platform — projected into Access.");
+
+        // 7. The clients of the issuer: the native client of the desktop, and the credentials of the inventory
         //    module — a service calling the API in its own name would use them; the secret generated is shown
         //    once, then the configuration's is re-applied so that a service's configuration can name the same.
         var catalog = scope.ServiceProvider.GetRequiredService<IssuerCatalog>();
@@ -232,6 +242,13 @@ public static class Install
         }
         var applied2 = await catalog.ApplyConfiguredClientsAsync();
         Console.WriteLine($"Client {DesktopClientId} declared: native, authorization code with PKCE, redirect URIs {string.Join(", ", desktop.Value.Client.RedirectUris)}. Configuration applied to: {string.Join(", ", applied2)}.");
+
+        if (token is not null)
+        {
+            var links = provider.GetRequiredService<IOptions<IdentityOptions>>().Value.Links;
+            Console.WriteLine("Open this link once the application runs, and choose the administrator's password there:");
+            Console.WriteLine(IdentityLinks.Of(links, null, IdentityLinks.ActivatePath, token));
+        }
         return 0;
     }
 
@@ -239,5 +256,35 @@ public static class Install
     {
         var index = Array.IndexOf(args, name);
         return index >= 0 && index + 1 < args.Length ? args[index + 1] : null;
+    }
+}
+
+/// <summary>What the two verbs of the host read: the configuration of the application, and the installer's connection.</summary>
+public static class SampleConfiguration
+{
+    /// <summary>
+    /// The configuration the application reads, in its environment. The example is a development host: its issuer
+    /// signs with development certificates, which only the Development environment accepts.
+    /// </summary>
+    public static (string Environment, IConfiguration Configuration) Load()
+    {
+        var environment = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ?? "Development";
+        var configuration = new ConfigurationBuilder()
+            .AddJsonFile("appsettings.json", optional: false)
+            .AddJsonFile($"appsettings.{environment}.json", optional: true)
+            .AddUserSecrets<LoggingMailer>(optional: true)
+            .AddEnvironmentVariables()
+            .Build();
+        return (environment, configuration);
+    }
+
+    /// <summary>The installer's connection, on the application's database: the role that owns the schemas.</summary>
+    public static string AdministrationConnectionString(IConfiguration configuration)
+    {
+        var application = new NpgsqlConnectionStringBuilder(configuration["Stellaegis:Registry:PostgreSQL:ConnectionString"]
+            ?? throw new InvalidOperationException("Stellaegis:Registry:PostgreSQL:ConnectionString is not configured."));
+        var installer = configuration["Sample:Install:ConnectionString"]
+            ?? throw new InvalidOperationException("Sample:Install:ConnectionString is not configured.");
+        return new NpgsqlConnectionStringBuilder(installer) { Database = application.Database }.ConnectionString;
     }
 }

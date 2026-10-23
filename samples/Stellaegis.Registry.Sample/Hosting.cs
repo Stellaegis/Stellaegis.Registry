@@ -48,9 +48,11 @@ public static class InventoryOperations
 }
 
 /// <summary>
-/// The roles the application declares in code, which the installation records and re-applies: three compartment
-/// roles for the people of the company, one platform role for whoever administers the application. A role is a
-/// name and a set of operations of the catalogue; the platform role takes every operation every module declares.
+/// The roles the application declares in code, which the installation records and re-applies: the operations of the
+/// owner of the compartment — a role the registry reserves, seated with the ownership, never assigned —, three
+/// compartment roles for the people of the company, one platform role for whoever administers the application. A
+/// role is a name and a set of operations of the catalogue; the platform role takes every operation every module
+/// declares.
 /// </summary>
 public static class SampleRoles
 {
@@ -61,6 +63,8 @@ public static class SampleRoles
 
     public static IReadOnlyList<RoleDeclaration> Declarations(IEnumerable<ModuleDeclaration> modules) =>
     [
+        new(RegistryRoles.Owner, RoleScope.Compartment, RoleCategory.Administration, "Propriétaire du compartiment",
+            [InventoryOperations.Read, InventoryOperations.Write]),
         new(TenantAdministrator, RoleScope.Compartment, RoleCategory.Administration, "Administrateur du compartiment",
             [InventoryOperations.Read, InventoryOperations.Write], AssignableRoles.Every(CompartmentRoleSelector.Business)),
         new(ShopManager, RoleScope.Compartment, RoleCategory.Business, "Chef d'atelier",
@@ -212,6 +216,12 @@ public sealed class LoggingMailer(ILogger<LoggingMailer> logger) : IIdentityMail
     public Task SendPasswordResetLinkAsync(string email, Uri link, TimeSpan lifetime, CancellationToken cancellationToken = default)
     {
         logger.LogWarning("MAIL to {Email}: reset your password at {Link}, valid for {Lifetime}", email, link, lifetime);
+        return Task.CompletedTask;
+    }
+
+    public Task SendActivationLinkAsync(string email, Uri link, TimeSpan lifetime, CancellationToken cancellationToken = default)
+    {
+        logger.LogWarning("MAIL to {Email}: activate your account at {Link}, valid for {Lifetime}", email, link, lifetime);
         return Task.CompletedTask;
     }
 

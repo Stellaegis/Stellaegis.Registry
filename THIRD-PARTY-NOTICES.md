@@ -3,15 +3,17 @@
 Stellaegis.Registry is licensed under the MIT License (see [LICENSE](LICENSE)).
 
 Its packages contain no third-party code. They reference the packages below, which NuGet installs
-alongside them, each under its own license. The table is completed as the packages are written.
+alongside them, each under its own license.
 
 | Component | Used by | License (SPDX) | Project |
 | --- | --- | --- | --- |
 | Stellaegis.Primitives, and Stellaegis.Primitives.Hosting | all packages | MIT | <https://github.com/Stellaegis/Stellaegis.Primitives> |
-| Stellaegis.Primitives.Data | `Stellaegis.Registry.PostgreSQL` | MIT | <https://github.com/Stellaegis/Stellaegis.Primitives> |
+| Stellaegis.Primitives.Data | `Stellaegis.Registry.PostgreSQL`, `Stellaegis.Registry.SqlServer` | MIT | <https://github.com/Stellaegis/Stellaegis.Primitives> |
 | Stellaegis.Primitives.AspNetCore | `Stellaegis.Registry.AspNetCore` | MIT | <https://github.com/Stellaegis/Stellaegis.Primitives> |
-| Dapper | `Stellaegis.Registry.PostgreSQL` | Apache-2.0 | <https://github.com/DapperLib/Dapper> |
+| Dapper | `Stellaegis.Registry.PostgreSQL`, `Stellaegis.Registry.SqlServer` | Apache-2.0 | <https://github.com/DapperLib/Dapper> |
 | Npgsql | `Stellaegis.Registry.PostgreSQL` | PostgreSQL | <https://github.com/npgsql/npgsql> |
+| Microsoft.Data.SqlClient | `Stellaegis.Registry.SqlServer` | MIT | <https://github.com/dotnet/SqlClient> |
+| System.Security.Cryptography.Pkcs | `Stellaegis.Registry.SqlServer` (pinned above the version Microsoft.Data.SqlClient pulls in) | MIT | <https://github.com/dotnet/runtime> |
 | Microsoft.Extensions.\* | all packages | MIT | <https://github.com/dotnet> |
 
 `Stellaegis.Registry.AspNetCore` uses the ASP.NET Core shared framework, which the host already has.
@@ -19,5 +21,5 @@ alongside them, each under its own license. The table is completed as the packag
 Test-only dependencies (xUnit, the ASP.NET Core test host) and the dependencies of the example host under
 `samples/` (the packages `Stellaegis.Identity`, `Stellaegis.Issuer` and `Stellaegis.Access`, MIT, and what they bring:
 OpenIddict, Apache-2.0; Entity Framework Core and its Npgsql provider, MIT and PostgreSQL) are not part of any
-package and are not listed here. The PostgreSQL server that the tests and the publishing workflow use is not part of any
-package either.
+package and are not listed here. The PostgreSQL and SQL Server servers that the tests and the publishing workflow use are
+not part of any package either.

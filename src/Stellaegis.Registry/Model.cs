@@ -63,8 +63,8 @@ public static class RegistryRoles
 {
     /// <summary>
     /// The role of the owner of a compartment, <c>owner</c>: an administration role whose assignable list covers every
-    /// compartment role and which requires a second factor, whatever its declaration says. The registry creates it; the
-    /// application may declare it to give it its operations. It is seated and transferred with the ownership, never
+    /// compartment role, whatever its declaration says. The registry creates it; the application may declare it to give
+    /// it its display name and its operations. It is seated and transferred with the ownership, never
     /// assigned nor unassigned.
     /// </summary>
     public const string Owner = "owner";

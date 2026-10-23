@@ -8,7 +8,7 @@ public enum PendingActKind
     /// <summary>The assignment of a platform role: whoever holds the platform holds every compartment.</summary>
     PlatformRole,
 
-    /// <summary>The creation of a role, or a change of its operations, its assignable list, its category or its second factor.</summary>
+    /// <summary>The creation of a role, or a change of its operations, its assignable list or its category.</summary>
     RoleDefinition,
 
     /// <summary>The rescue of a compartment whose owner is unreachable, gone or dead: another owner seated by the platform.</summary>

@@ -26,9 +26,9 @@ public interface ICatalog
 
 /// <summary>
 /// The roles: a name, a category and a set of operations of the catalogue, in one scope, with the roles each lets its
-/// holder assign and whether it requires a second factor. Every write names the actor who makes it, which the row
-/// keeps and the event carries. Nobody changes the definition of a role they hold
-/// (<see cref="RegistryErrors.RoleHeldByAuthor"/>); a platform role always requires a second factor.
+/// holder assign. Every write names the actor who makes it, which the row keeps and the event carries. Nobody changes
+/// the definition of a role they hold (<see cref="RegistryErrors.RoleHeldByAuthor"/>). A second factor is never the
+/// role's: it goes with the operations the role grants (<see cref="CatalogEntry.RequiresSecondFactor"/>).
 /// </summary>
 public interface IRoles
 {
@@ -951,9 +951,9 @@ internal sealed class AssignmentRules(IRoleStore roles, IMembershipStore members
 
 /// <summary>
 /// The ownership of a compartment: one owner, carried by the compartment, its legal holder. A prerogative rather than a
-/// permission: the owner holds the role of the owner — every administration right of the compartment, a second factor
-/// required —, which nobody assigns, unassigns or takes from them, themselves included, but by a transfer; nobody
-/// else changes their membership or roles there. The transfer is proposed by the owner and accepted by its recipient,
+/// permission: the owner holds the role of the owner — every administration right of the compartment —, which nobody
+/// assigns, unassigns or takes from them, themselves included, but by a transfer; nobody else changes their membership
+/// or roles there. The transfer is proposed by the owner and accepted by its recipient,
 /// everything checked again at the acceptance; the outgoing owner keeps the roles they chose.
 /// </summary>
 public interface IOwnership
