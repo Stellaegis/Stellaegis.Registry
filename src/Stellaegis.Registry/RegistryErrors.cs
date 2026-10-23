@@ -53,6 +53,12 @@ public static class RegistryErrors
     /// <summary>The code of <see cref="RoleNamedAssignable"/>.</summary>
     public const string RoleNamedAssignableCode = "Role.NamedAssignable";
 
+    /// <summary>The code of <see cref="RoleNotAssignable"/>.</summary>
+    public const string RoleNotAssignableCode = "Role.NotAssignable";
+
+    /// <summary>The code of <see cref="OwnRoles"/>.</summary>
+    public const string OwnRolesCode = "Role.OwnRoles";
+
     /// <summary>The code of <see cref="UnknownOperation"/>.</summary>
     public const string UnknownOperationCode = "Catalog.UnknownOperation";
 
@@ -118,6 +124,17 @@ public static class RegistryErrors
     /// <summary>Another role names this one in its assignable list: remove it from there before deleting it.</summary>
     public static Error RoleNamedAssignable(string role, string by)
         => Error.PreconditionFailed(RoleNamedAssignableCode, $"Role '{role}' is named in the assignable list of role '{by}'; remove it from there before deleting it.");
+
+    /// <summary>
+    /// The role is in the assignable list of no role the actor holds: assigning a role is a right of its own, bounded by
+    /// that list. Unassigning it, or removing a member who holds it, follows the same rule.
+    /// </summary>
+    public static Error RoleNotAssignable(string role)
+        => Error.Forbidden(RoleNotAssignableCode, $"Role '{role}' is in the assignable list of no role its author holds.");
+
+    /// <summary>Nobody changes their own memberships or roles, in either direction: who wants to drop a role asks for it.</summary>
+    public static Error OwnRoles(string subject)
+        => Error.Forbidden(OwnRolesCode, $"User '{subject}' is the author of the change: nobody changes their own memberships or roles.");
 
     /// <summary>The operation is not in the catalogue: no module declares it.</summary>
     public static Error UnknownOperation(string operation)

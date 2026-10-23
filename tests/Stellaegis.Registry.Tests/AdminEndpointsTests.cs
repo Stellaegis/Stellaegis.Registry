@@ -171,7 +171,10 @@ public sealed class AdminEndpointsTests
     public async Task A_role_assigned_by_the_route_is_projected_to_the_sink()
     {
         await using var app = await StartAsync(MapPerOperation);
-        var client = app.ClientAs("operator", Everything);
+        // The caller assigns what the assignable list of their roles covers: an operator of the platform, seated by the installation.
+        using (var scope = app.Services.CreateScope())
+            Assert.True((await scope.ServiceProvider.GetRequiredService<IOperators>().AssignAsync(John, "super_admin", By, Ct)).IsSuccess);
+        var client = app.ClientAs(John, Everything);
         var sink = app.Sink();
 
         Assert.Equal(HttpStatusCode.NoContent, (await client.PutAsync($"/api/admin/registry/memberships/acme/{Jane}", null, Ct)).StatusCode);
@@ -186,7 +189,7 @@ public sealed class AdminEndpointsTests
         var members = await client.GetFromJsonAsync<MemberSummary[]>("/api/admin/registry/memberships/compartments/acme", Ct);
         var jane = Assert.Single(members!);
         Assert.Equal(["accountant"], jane.Roles);
-        Assert.Equal("operator", jane.GrantedBy);
+        Assert.Equal(John, jane.GrantedBy);
         var mine = await client.GetFromJsonAsync<MemberSummary[]>($"/api/admin/registry/memberships/users/{Jane}", Ct);
         Assert.Equal("acme", Assert.Single(mine!).Compartment);
 
@@ -205,7 +208,7 @@ public sealed class AdminEndpointsTests
         Assert.Equal(HttpStatusCode.NoContent, (await client.PutAsync($"/api/admin/registry/operators/{Jane}/roles/super_admin", null, Ct)).StatusCode);
         Assert.Equal([RegistryOperations.CompartmentsWrite.Identity, ItemsPurge.Identity], sink.Last(RightsSinkCallKind.ReplaceAdminGrants)!.Values.Order());
         var operators = await client.GetFromJsonAsync<OperatorSummary[]>("/api/admin/registry/operators", Ct);
-        Assert.Equal(["super_admin"], Assert.Single(operators!).Roles);
+        Assert.Equal(["super_admin"], operators!.Single(entry => entry.Subject == Jane).Roles);
         Assert.Equal(["super_admin"], (await client.GetFromJsonAsync<OperatorSummary>($"/api/admin/registry/operators/{Jane}", Ct))!.Roles);
         Assert.Equal(HttpStatusCode.NoContent, (await client.DeleteAsync($"/api/admin/registry/operators/{Jane}/roles/super_admin", Ct)).StatusCode);
         Assert.Empty(sink.Last(RightsSinkCallKind.ReplaceAdminGrants)!.Values);

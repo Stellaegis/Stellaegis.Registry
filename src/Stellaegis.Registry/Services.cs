@@ -100,16 +100,23 @@ public interface IUserDirectory
 /// <summary>The memberships, and the compartment roles of the members. Every write names its actor, which the grant keeps.</summary>
 public interface IMemberships
 {
-    /// <summary>Makes the user a member of the compartment, without any role yet.</summary>
+    /// <summary>Makes the user a member of the compartment, without any role yet. Nobody adds themselves (<see cref="RegistryErrors.OwnRoles"/>).</summary>
     Task<Result> AddAsync(string subject, Compartment compartment, Actor actor, CancellationToken cancellationToken = default);
 
-    /// <summary>Removes the user from the compartment, with their roles there.</summary>
+    /// <summary>
+    /// Removes the user from the compartment, with their roles there: the actor may assign each of them
+    /// (<see cref="RegistryErrors.RoleNotAssignable"/>), and nobody removes themselves (<see cref="RegistryErrors.OwnRoles"/>).
+    /// </summary>
     Task<Result> RemoveAsync(string subject, Compartment compartment, Actor actor, CancellationToken cancellationToken = default);
 
-    /// <summary>Assigns a compartment role to a member.</summary>
+    /// <summary>
+    /// Assigns a compartment role to a member: the role is in the assignable list of a role the actor holds in the
+    /// compartment or on the platform (<see cref="RegistryErrors.RoleNotAssignable"/>), and the member is not the actor
+    /// (<see cref="RegistryErrors.OwnRoles"/>). A job — the installation — is bounded by neither.
+    /// </summary>
     Task<Result> AssignRoleAsync(string subject, Compartment compartment, string role, Actor actor, CancellationToken cancellationToken = default);
 
-    /// <summary>Unassigns a compartment role from a member.</summary>
+    /// <summary>Unassigns a compartment role from a member, under the same rules as its assignment.</summary>
     Task<Result> UnassignRoleAsync(string subject, Compartment compartment, string role, Actor actor, CancellationToken cancellationToken = default);
 
     /// <summary>The memberships of the user, with their roles.</summary>
@@ -122,10 +129,14 @@ public interface IMemberships
 /// <summary>The operators of the platform: the platform roles of the users. Every write names its actor, which the grant keeps.</summary>
 public interface IOperators
 {
-    /// <summary>Assigns a platform role to a user.</summary>
+    /// <summary>
+    /// Assigns a platform role to a user: the role is in the assignable list of a platform role the actor holds
+    /// (<see cref="RegistryErrors.RoleNotAssignable"/>), and the user is not the actor (<see cref="RegistryErrors.OwnRoles"/>).
+    /// A job — the installation — is bounded by neither.
+    /// </summary>
     Task<Result> AssignAsync(string subject, string role, Actor actor, CancellationToken cancellationToken = default);
 
-    /// <summary>Unassigns a platform role from a user.</summary>
+    /// <summary>Unassigns a platform role from a user, under the same rules as its assignment.</summary>
     Task<Result> UnassignAsync(string subject, string role, Actor actor, CancellationToken cancellationToken = default);
 
     /// <summary>The platform roles of the user.</summary>
@@ -525,6 +536,7 @@ internal sealed class Memberships(
     IUserStore users,
     ICompartmentStore compartments,
     IRoleStore roles,
+    AssignmentRules rules,
     RightsProjector projector,
     IEventPublisher publisher,
     TimeProvider time) : IMemberships
@@ -536,6 +548,8 @@ internal sealed class Memberships(
         var check = await CheckAsync(subject, compartment, cancellationToken).ConfigureAwait(false);
         if (check.IsFailure)
             return check;
+        if (AssignmentRules.Own(subject, actor) is { } own)
+            return Result.Failure(own);
         if (await store.IsMemberAsync(subject, compartment, cancellationToken).ConfigureAwait(false))
             return Result.Success();
         await store.AddAsync(subject, compartment, new Stamp(time.GetUtcNow(), actor), cancellationToken).ConfigureAwait(false);
@@ -551,6 +565,13 @@ internal sealed class Memberships(
         Guard.NotNull(actor);
         if (!await store.IsMemberAsync(subject, compartment, cancellationToken).ConfigureAwait(false))
             return Result.Success();
+        // Removing a member removes their roles: the actor may assign each of them, or the removal would strip a role
+        // beyond the actor's list — the manager of the accesses removing whoever made them so.
+        var held = (await store.ListByUserAsync(subject, cancellationToken).ConfigureAwait(false))
+            .FirstOrDefault(membership => membership.Compartment == compartment)?.Roles ?? [];
+        var refused = await rules.CheckAsync(actor, subject, compartment, held, cancellationToken).ConfigureAwait(false);
+        if (refused is not null)
+            return Result.Failure(refused);
         await store.RemoveAsync(subject, compartment, cancellationToken).ConfigureAwait(false);
         await projector.ProjectMembershipsAsync(subject, cancellationToken).ConfigureAwait(false);
         await projector.ProjectUserGrantsAsync(subject, compartment, cancellationToken).ConfigureAwait(false);
@@ -572,6 +593,9 @@ internal sealed class Memberships(
             return Result.Failure(RegistryErrors.RoleScopeMismatch(role, RoleScope.Compartment));
         if (!await store.IsMemberAsync(subject, compartment, cancellationToken).ConfigureAwait(false))
             return Result.Failure(RegistryErrors.NotMember(subject, compartment));
+        var refused = await rules.CheckAsync(actor, subject, compartment, [role], cancellationToken).ConfigureAwait(false);
+        if (refused is not null)
+            return Result.Failure(refused);
 
         await store.AssignRoleAsync(subject, compartment, role, new Stamp(time.GetUtcNow(), actor), cancellationToken).ConfigureAwait(false);
         await projector.ProjectUserGrantsAsync(subject, compartment, cancellationToken).ConfigureAwait(false);
@@ -587,6 +611,9 @@ internal sealed class Memberships(
         Guard.NotNull(actor);
         if (!await store.IsMemberAsync(subject, compartment, cancellationToken).ConfigureAwait(false))
             return Result.Failure(RegistryErrors.NotMember(subject, compartment));
+        var refused = await rules.CheckAsync(actor, subject, compartment, [role], cancellationToken).ConfigureAwait(false);
+        if (refused is not null)
+            return Result.Failure(refused);
         await store.UnassignRoleAsync(subject, compartment, role, cancellationToken).ConfigureAwait(false);
         await projector.ProjectUserGrantsAsync(subject, compartment, cancellationToken).ConfigureAwait(false);
         await PublishAsync(subject, compartment, isMember: true, actor, cancellationToken).ConfigureAwait(false);
@@ -624,6 +651,7 @@ internal sealed class Operators(
     IOperatorStore store,
     IUserStore users,
     IRoleStore roles,
+    AssignmentRules rules,
     RightsProjector projector,
     TimeProvider time) : IOperators
 {
@@ -641,6 +669,9 @@ internal sealed class Operators(
             return Result.Failure(RegistryErrors.RoleNotFound(role));
         if (record.Scope != RoleScope.Platform)
             return Result.Failure(RegistryErrors.RoleScopeMismatch(role, RoleScope.Platform));
+        var refused = await rules.CheckAsync(actor, subject, compartment: null, [role], cancellationToken).ConfigureAwait(false);
+        if (refused is not null)
+            return Result.Failure(refused);
 
         await store.AssignAsync(subject, role, new Stamp(time.GetUtcNow(), actor), cancellationToken).ConfigureAwait(false);
         await projector.ProjectAdminGrantsAsync(subject, cancellationToken).ConfigureAwait(false);
@@ -652,6 +683,9 @@ internal sealed class Operators(
         subject = RegistryRules.NormalizeSubject(subject);
         Guard.NotWhiteSpace(role);
         Guard.NotNull(actor);
+        var refused = await rules.CheckAsync(actor, subject, compartment: null, [role], cancellationToken).ConfigureAwait(false);
+        if (refused is not null)
+            return Result.Failure(refused);
         await store.UnassignAsync(subject, role, cancellationToken).ConfigureAwait(false);
         await projector.ProjectAdminGrantsAsync(subject, cancellationToken).ConfigureAwait(false);
         return Result.Success();
@@ -662,4 +696,61 @@ internal sealed class Operators(
 
     public Task<IReadOnlyList<(string Subject, IReadOnlyCollection<string> Roles)>> ListAsync(CancellationToken cancellationToken = default)
         => store.ListAsync(cancellationToken);
+}
+
+/// <summary>
+/// Who may assign or unassign which role (I3, I7). Assigning is a right of its own, bounded by the assignable lists
+/// of the roles the actor holds, and does not suppose holding the role assigned: in a compartment, those of the
+/// actor's roles there and of their platform roles — an operator acts on the compartments —; on the platform, those
+/// of their platform roles. Nobody changes their own memberships or roles. A job — the installation — is bounded by
+/// neither: it is what seats the first administrator. Any other actor that is not a person — a client — holds no role,
+/// and so assigns none. Access answered first whether the actor may assign at all, on the operation of the route;
+/// this answers which roles.
+/// </summary>
+internal sealed class AssignmentRules(IRoleStore roles, IMembershipStore memberships, IOperatorStore operators)
+{
+    /// <summary>Whether the actor is a job, <c>job:…</c>: the installation, a scheduled task.</summary>
+    public static bool IsJob(Actor actor) => actor.Value.StartsWith(Actor.JobPrefix, StringComparison.Ordinal);
+
+    /// <summary>The refusal when the actor is the person whose memberships or roles change; <see langword="null"/> otherwise.</summary>
+    public static Error? Own(string subject, Actor actor)
+        => RegistryRules.IsSubject(actor.Value) && RegistryRules.NormalizeSubject(actor.Value) == subject ? RegistryErrors.OwnRoles(subject) : null;
+
+    /// <summary>
+    /// The refusal when the actor may not assign every role of <paramref name="roleNames"/> to <paramref name="subject"/>
+    /// — in <paramref name="compartment"/>, or on the platform when it is <see langword="null"/> —; <see langword="null"/> otherwise.
+    /// </summary>
+    public async Task<Error?> CheckAsync(Actor actor, string subject, Compartment? compartment, IReadOnlyCollection<string> roleNames, CancellationToken cancellationToken)
+    {
+        if (IsJob(actor))
+            return null;
+        if (Own(subject, actor) is { } own)
+            return own;
+        if (roleNames.Count == 0)
+            return null;
+
+        var all = (await roles.ListAsync(cancellationToken: cancellationToken).ConfigureAwait(false)).ToDictionary(role => role.Name, StringComparer.Ordinal);
+        var held = new List<string>();
+        if (RegistryRules.IsSubject(actor.Value))
+        {
+            var author = RegistryRules.NormalizeSubject(actor.Value);
+            held.AddRange(await operators.ListRolesAsync(author, cancellationToken).ConfigureAwait(false));
+            if (compartment is not null)
+                held.AddRange((await memberships.ListByUserAsync(author, cancellationToken).ConfigureAwait(false))
+                    .Where(membership => membership.Compartment == compartment)
+                    .SelectMany(membership => membership.Roles));
+        }
+        var lists = held.Distinct(StringComparer.Ordinal).Where(all.ContainsKey).Select(name => all[name].Assignable).ToList();
+
+        foreach (var name in roleNames)
+        {
+            // A role gone from the catalogue of roles cannot be checked; it cannot be assigned either, and unassigning
+            // what no longer exists takes nothing from anyone.
+            if (!all.TryGetValue(name, out var role))
+                continue;
+            if (!lists.Any(list => list.Covers(role)))
+                return RegistryErrors.RoleNotAssignable(name);
+        }
+        return null;
+    }
 }

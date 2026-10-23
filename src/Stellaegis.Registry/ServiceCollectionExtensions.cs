@@ -25,6 +25,7 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<IEventPublisher>(NullEventPublisher.Instance);
         services.TryAddScoped<IRightsSink, NullRightsSink>();
         services.TryAddScoped<RightsProjector>();
+        services.TryAddScoped<AssignmentRules>();
         services.TryAddScoped<ICatalog, Catalog>();
         services.TryAddScoped<IRoles, Roles>();
         services.TryAddScoped<ICompartments, Compartments>();
