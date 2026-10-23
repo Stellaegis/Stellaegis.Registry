@@ -65,6 +65,61 @@ internal sealed class PostgreSqlRegistryStore
         await uow.Repo<CompartmentRepository>().UpsertAsync(compartment, cancellationToken).ConfigureAwait(false);
     }
 
+    // The ownership changes in one transaction: the owner, the membership and the roles together, or nothing.
+    async Task<bool> ICompartmentStore.SeatOwnerAsync(Compartment compartment, string owner, Stamp granted, CancellationToken cancellationToken)
+    {
+        Guard.NotNull(compartment);
+        await using var uow = await _units.OpenAndBeginAsync(cancellationToken).ConfigureAwait(false);
+        if (!await uow.Repo<CompartmentRepository>().SetOwnerIfNoneAsync(compartment.Value, owner, cancellationToken).ConfigureAwait(false))
+            return false;
+        var memberships = uow.Repo<MembershipRepository>();
+        await memberships.InsertAsync(owner, compartment.Value, granted, cancellationToken).ConfigureAwait(false);
+        await memberships.InsertRoleAsync(owner, compartment.Value, RegistryRoles.Owner, granted, cancellationToken).ConfigureAwait(false);
+        await uow.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
+    async Task<OwnershipTransfer?> ICompartmentStore.GetTransferAsync(Compartment compartment, CancellationToken cancellationToken)
+    {
+        Guard.NotNull(compartment);
+        await using var uow = await _units.OpenAsync(cancellationToken).ConfigureAwait(false);
+        return await uow.Repo<CompartmentRepository>().GetTransferAsync(compartment.Value, cancellationToken).ConfigureAwait(false);
+    }
+
+    async Task ICompartmentStore.SaveTransferAsync(OwnershipTransfer transfer, CancellationToken cancellationToken)
+    {
+        Guard.NotNull(transfer);
+        await using var uow = await _units.OpenAndBeginAsync(cancellationToken).ConfigureAwait(false);
+        await uow.Repo<CompartmentRepository>().SaveTransferAsync(transfer, cancellationToken).ConfigureAwait(false);
+        await uow.CommitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    async Task ICompartmentStore.DeleteTransferAsync(Compartment compartment, CancellationToken cancellationToken)
+    {
+        Guard.NotNull(compartment);
+        await using var uow = await _units.OpenAsync(cancellationToken).ConfigureAwait(false);
+        await uow.Repo<CompartmentRepository>().DeleteTransferAsync(compartment.Value, cancellationToken).ConfigureAwait(false);
+    }
+
+    async Task<bool> ICompartmentStore.TransferOwnershipAsync(OwnershipTransfer transfer, IReadOnlyCollection<string> dropped, Stamp granted, CancellationToken cancellationToken)
+    {
+        Guard.NotNull(transfer);
+        Guard.NotNull(dropped);
+        var compartment = transfer.Compartment.Value;
+        await using var uow = await _units.OpenAndBeginAsync(cancellationToken).ConfigureAwait(false);
+        var compartments = uow.Repo<CompartmentRepository>();
+        if (!await compartments.ReplaceOwnerAsync(compartment, transfer.From, transfer.To, cancellationToken).ConfigureAwait(false))
+            return false;
+        var memberships = uow.Repo<MembershipRepository>();
+        await memberships.InsertRoleAsync(transfer.To, compartment, RegistryRoles.Owner, granted, cancellationToken).ConfigureAwait(false);
+        await memberships.DeleteRoleAsync(transfer.From, compartment, RegistryRoles.Owner, cancellationToken).ConfigureAwait(false);
+        foreach (var role in dropped)
+            await memberships.DeleteRoleAsync(transfer.From, compartment, role, cancellationToken).ConfigureAwait(false);
+        await compartments.DeleteTransferAsync(compartment, cancellationToken).ConfigureAwait(false);
+        await uow.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
     // ── Users ────────────────────────────────────────────────────────────────
 
     async Task<UserRecord?> IUserStore.GetAsync(string subject, CancellationToken cancellationToken)

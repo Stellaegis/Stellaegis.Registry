@@ -111,12 +111,14 @@ internal static class Names
 /// <summary>The rows of <c>reg.compartments</c>, read and written on the connection of a unit of work.</summary>
 internal sealed class CompartmentRepository(DbConnection connection, Func<DbTransaction?> transaction)
 {
-    private sealed record Row(string Compartment, string DisplayName, string Status, DateTime CreatedAt, string CreatedBy, DateTime ModifiedAt, string ModifiedBy);
+    private sealed record Row(string Compartment, string DisplayName, string Status, DateTime CreatedAt, string CreatedBy, DateTime ModifiedAt, string ModifiedBy, string? Owner);
+
+    private sealed record TransferRow(string Compartment, string From, string To, DateTime ProposedAt, string ProposedBy, DateTime ExpiresAt, string? Kept);
 
     private const string Columns = "compartment, display_name, status, created_at, created_by, modified_at, modified_by";
 
     // Dapper matches a positional record by the names of its parameters: the columns are read under those names.
-    private const string Selected = "compartment as Compartment, display_name as DisplayName, status as Status, created_at as CreatedAt, created_by as CreatedBy, modified_at as ModifiedAt, modified_by as ModifiedBy";
+    private const string Selected = "compartment as Compartment, display_name as DisplayName, status as Status, created_at as CreatedAt, created_by as CreatedBy, modified_at as ModifiedAt, modified_by as ModifiedBy, owner_subject as Owner";
 
     public async Task<CompartmentRecord?> GetAsync(string compartment, CancellationToken cancellationToken)
     {
@@ -154,9 +156,71 @@ internal sealed class CompartmentRepository(DbConnection connection, Func<DbTran
                 modifiedBy = compartment.Audit.Modified.By.Value,
             }, transaction(), cancellationToken: cancellationToken));
 
+    /// <summary>Seats the owner when there is none; whether it was seated.</summary>
+    public async Task<bool> SetOwnerIfNoneAsync(string compartment, string owner, CancellationToken cancellationToken)
+        => await connection.ExecuteAsync(new CommandDefinition(
+            "update reg.compartments set owner_subject = @owner where compartment = @compartment and owner_subject is null",
+            new { compartment, owner }, transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false) == 1;
+
+    /// <summary>Replaces the owner when it is still <paramref name="from"/>; whether it was replaced.</summary>
+    public async Task<bool> ReplaceOwnerAsync(string compartment, string from, string to, CancellationToken cancellationToken)
+        => await connection.ExecuteAsync(new CommandDefinition(
+            "update reg.compartments set owner_subject = @to where compartment = @compartment and owner_subject = @from",
+            new { compartment, from, to }, transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false) == 1;
+
+    public async Task<OwnershipTransfer?> GetTransferAsync(string compartment, CancellationToken cancellationToken)
+    {
+        var rows = (await connection.QueryAsync<TransferRow>(new CommandDefinition(
+            """
+            select t.compartment as Compartment, t.from_subject as From, t.to_subject as To, t.proposed_at as ProposedAt,
+                   t.proposed_by as ProposedBy, t.expires_at as ExpiresAt, k.role as Kept
+            from reg.ownership_transfers t
+            left join reg.ownership_transfer_kept_roles k on k.compartment = t.compartment
+            where t.compartment = @compartment
+            order by k.role
+            """,
+            new { compartment }, transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false)).ToList();
+        if (rows.Count == 0)
+            return null;
+        var first = rows[0];
+        return new OwnershipTransfer(Compartment.Parse(first.Compartment), first.From, first.To,
+            rows.Where(row => row.Kept is not null).Select(row => row.Kept!).ToList(),
+            new Stamp(new DateTimeOffset(first.ProposedAt, TimeSpan.Zero), Actor.Parse(first.ProposedBy)),
+            new DateTimeOffset(first.ExpiresAt, TimeSpan.Zero));
+    }
+
+    public async Task SaveTransferAsync(OwnershipTransfer transfer, CancellationToken cancellationToken)
+    {
+        await DeleteTransferAsync(transfer.Compartment.Value, cancellationToken).ConfigureAwait(false);
+        await connection.ExecuteAsync(new CommandDefinition(
+            """
+            insert into reg.ownership_transfers (compartment, from_subject, to_subject, proposed_at, proposed_by, expires_at)
+            values (@compartment, @from, @to, @proposedAt, @proposedBy, @expiresAt)
+            """,
+            new
+            {
+                compartment = transfer.Compartment.Value,
+                from = transfer.From,
+                to = transfer.To,
+                proposedAt = Names.Utc(transfer.Proposed.At),
+                proposedBy = transfer.Proposed.By.Value,
+                expiresAt = Names.Utc(transfer.ExpiresAt),
+            }, transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false);
+        if (transfer.Kept.Count > 0)
+            await connection.ExecuteAsync(new CommandDefinition(
+                "insert into reg.ownership_transfer_kept_roles (compartment, role) select @compartment, unnest(@roles::text[])",
+                new { compartment = transfer.Compartment.Value, roles = transfer.Kept.Distinct(StringComparer.Ordinal).ToArray() },
+                transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false);
+    }
+
+    public Task DeleteTransferAsync(string compartment, CancellationToken cancellationToken)
+        => connection.ExecuteAsync(new CommandDefinition(
+            "delete from reg.ownership_transfers where compartment = @compartment",
+            new { compartment }, transaction(), cancellationToken: cancellationToken));
+
     private static CompartmentRecord ToRecord(Row row)
         => new(Compartment.Parse(row.Compartment), row.DisplayName, Names.CompartmentStatusOf(row.Status),
-            Names.AuditOf(row.CreatedAt, row.CreatedBy, row.ModifiedAt, row.ModifiedBy));
+            Names.AuditOf(row.CreatedAt, row.CreatedBy, row.ModifiedAt, row.ModifiedBy), row.Owner);
 }
 
 /// <summary>The rows of <c>reg.users</c>: the projection of the accounts of Identity.</summary>

@@ -18,6 +18,25 @@ public sealed record CompartmentChangedEvent : IEvent
     public required Actor By { get; init; }
 }
 
+/// <summary>Published when a compartment received its first owner, or its ownership was transferred.</summary>
+public sealed record OwnershipChangedEvent : IEvent
+{
+    /// <inheritdoc/>
+    public required DateTimeOffset OccurredAt { get; init; }
+
+    /// <summary>The compartment.</summary>
+    public required Compartment Compartment { get; init; }
+
+    /// <summary>Its owner from now on.</summary>
+    public required string Owner { get; init; }
+
+    /// <summary>Its previous owner, or <see langword="null"/> for the first one.</summary>
+    public string? Previous { get; init; }
+
+    /// <summary>Who made the change: the installation or an operator for the first owner, the recipient for a transfer.</summary>
+    public required Actor By { get; init; }
+}
+
 /// <summary>Published when a user was recorded, deactivated or reactivated.</summary>
 public sealed record UserChangedEvent : IEvent
 {

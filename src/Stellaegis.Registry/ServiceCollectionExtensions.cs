@@ -26,6 +26,8 @@ public static class ServiceCollectionExtensions
         services.TryAddScoped<IRightsSink, NullRightsSink>();
         services.TryAddScoped<RightsProjector>();
         services.TryAddScoped<AssignmentRules>();
+        services.TryAddScoped<Ownership>();
+        services.TryAddScoped<IOwnership>(provider => provider.GetRequiredService<Ownership>());
         services.TryAddScoped<ICatalog, Catalog>();
         services.TryAddScoped<IRoles, Roles>();
         services.TryAddScoped<ICompartments, Compartments>();

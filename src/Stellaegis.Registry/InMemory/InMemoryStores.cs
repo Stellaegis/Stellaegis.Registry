@@ -18,6 +18,11 @@ public sealed class InMemoryRegistryData
 
     internal ConcurrentDictionary<string, Dictionary<string, Stamp>> Operators { get; } = new(StringComparer.Ordinal);
 
+    internal ConcurrentDictionary<Compartment, OwnershipTransfer> Transfers { get; } = new();
+
+    // The ownership of a compartment changes under this lock: its owner, its membership and roles, at once.
+    internal object OwnershipLock { get; } = new();
+
     /// <summary>Forgets everything.</summary>
     public void Clear()
     {
@@ -27,6 +32,7 @@ public sealed class InMemoryRegistryData
         Roles.Clear();
         Memberships.Clear();
         Operators.Clear();
+        Transfers.Clear();
     }
 
     internal static IReadOnlyCollection<string> Snapshot(Dictionary<string, Stamp> set)
@@ -54,8 +60,60 @@ internal sealed class InMemoryCompartmentStore(InMemoryRegistryData data) : ICom
 
     public Task SaveAsync(CompartmentRecord compartment, CancellationToken cancellationToken = default)
     {
-        data.Compartments[compartment.Compartment] = compartment;
+        lock (data.OwnershipLock)
+            data.Compartments.AddOrUpdate(compartment.Compartment, compartment with { Owner = null }, (_, existing) => compartment with { Owner = existing.Owner });
         return Task.CompletedTask;
+    }
+
+    public Task<bool> SeatOwnerAsync(Compartment compartment, string owner, Stamp granted, CancellationToken cancellationToken = default)
+    {
+        lock (data.OwnershipLock)
+        {
+            if (!data.Compartments.TryGetValue(compartment, out var record) || record.Owner is not null)
+                return Task.FromResult(false);
+            data.Compartments[compartment] = record with { Owner = owner };
+            var entry = data.Memberships.GetOrAdd((owner, compartment), _ => new InMemoryRegistryData.MembershipEntry(granted));
+            lock (entry.Roles)
+                entry.Roles.TryAdd(RegistryRoles.Owner, granted);
+            return Task.FromResult(true);
+        }
+    }
+
+    public Task<OwnershipTransfer?> GetTransferAsync(Compartment compartment, CancellationToken cancellationToken = default)
+        => Task.FromResult(data.Transfers.GetValueOrDefault(compartment));
+
+    public Task SaveTransferAsync(OwnershipTransfer transfer, CancellationToken cancellationToken = default)
+    {
+        data.Transfers[transfer.Compartment] = transfer;
+        return Task.CompletedTask;
+    }
+
+    public Task DeleteTransferAsync(Compartment compartment, CancellationToken cancellationToken = default)
+    {
+        data.Transfers.TryRemove(compartment, out _);
+        return Task.CompletedTask;
+    }
+
+    public Task<bool> TransferOwnershipAsync(OwnershipTransfer transfer, IReadOnlyCollection<string> dropped, Stamp granted, CancellationToken cancellationToken = default)
+    {
+        lock (data.OwnershipLock)
+        {
+            if (!data.Compartments.TryGetValue(transfer.Compartment, out var record) || record.Owner != transfer.From
+                || !data.Memberships.TryGetValue((transfer.To, transfer.Compartment), out var incoming))
+                return Task.FromResult(false);
+            data.Compartments[transfer.Compartment] = record with { Owner = transfer.To };
+            lock (incoming.Roles)
+                incoming.Roles.TryAdd(RegistryRoles.Owner, granted);
+            if (data.Memberships.TryGetValue((transfer.From, transfer.Compartment), out var outgoing))
+                lock (outgoing.Roles)
+                {
+                    outgoing.Roles.Remove(RegistryRoles.Owner);
+                    foreach (var role in dropped)
+                        outgoing.Roles.Remove(role);
+                }
+            data.Transfers.TryRemove(transfer.Compartment, out _);
+            return Task.FromResult(true);
+        }
     }
 }
 

@@ -24,7 +24,8 @@ namespace Stellaegis.Registry.AspNetCore;
 /// </para>
 /// <list type="bullet">
 ///   <item><c>GET registry/compartments</c>, <c>GET registry/compartments/{compartment}</c> — <c>compartments.read</c></item>
-///   <item><c>POST registry/compartments</c> (201), <c>PUT registry/compartments/{compartment}</c> (the display name), <c>POST …/suspend</c>, <c>…/resume</c>, <c>…/terminate</c> — <c>compartments.write</c></item>
+///   <item><c>POST registry/compartments</c> (201, with its first owner or without), <c>PUT registry/compartments/{compartment}</c> (the display name), <c>POST …/suspend</c>, <c>…/resume</c>, <c>…/terminate</c>, <c>PUT …/owner/{subject}</c> (the first owner, once) — <c>compartments.write</c></item>
+///   <item><c>GET registry/compartments/{compartment}/owner/transfer</c> — <c>compartments.read</c>; <c>PUT …/owner/transfer</c>, <c>POST …/owner/transfer/accept</c>, <c>DELETE …/owner/transfer</c> — <c>ownership.write</c>, the registry checking the author is the owner, or the recipient</item>
 ///   <item><c>GET registry/users</c>, <c>GET registry/users/{subject}</c> — <c>directory.read</c>; no creation: a user is the projection of an account of Identity, recorded by the host from <c>UserRegistered</c></item>
 ///   <item><c>POST registry/users/{subject}/deactivate</c>, <c>…/reactivate</c> — <c>directory.write</c></item>
 ///   <item><c>GET registry/catalog</c>, <c>GET registry/catalog/{module}</c> — <c>catalog.read</c></item>
@@ -109,7 +110,11 @@ public static class RegistryAdminEndpoints
             {
                 if (request is null || !Compartment.TryParse(request.Compartment, out var parsed) || string.IsNullOrWhiteSpace(request.DisplayName))
                     return Invalid("A compartment has a name in the grammar of a compartment and a display name.");
-                var created = await service.CreateAsync(parsed, request.DisplayName, Callers.ActorOf(http), ct);
+                if (request.Owner is not null && !RegistryRules.IsSubject(request.Owner))
+                    return NotASubject(request.Owner);
+                var created = request.Owner is null
+                    ? await service.CreateAsync(parsed, request.DisplayName, Callers.ActorOf(http), ct)
+                    : await service.CreateAsync(parsed, request.DisplayName, request.Owner, Callers.ActorOf(http), ct);
                 Written(http, loggers, "created compartment {Compartment}", parsed);
                 return created.IsSuccess ? Results.Created((string?)null, CompartmentSummary.Of(created.Value)) : created.ToHttpResult();
             })
@@ -135,6 +140,71 @@ public static class RegistryAdminEndpoints
         MapTransition(compartments, "suspend", (service, compartment, actor, ct) => service.SuspendAsync(compartment, actor, ct));
         MapTransition(compartments, "resume", (service, compartment, actor, ct) => service.ResumeAsync(compartment, actor, ct));
         MapTransition(compartments, "terminate", (service, compartment, actor, ct) => service.TerminateAsync(compartment, actor, ct));
+        MapOwnership(compartments);
+    }
+
+    private static void MapOwnership(RouteGroupBuilder compartments)
+    {
+        compartments.MapPut("/{compartment}/owner/{subject}", async (string compartment, string subject, HttpContext http, IOwnership service, ILoggerFactory loggers, CancellationToken ct) =>
+            {
+                if (!Compartment.TryParse(compartment, out var parsed))
+                    return NotACompartment(compartment);
+                if (!RegistryRules.IsSubject(subject))
+                    return NotASubject(subject);
+                Written(http, loggers, "seated the owner of compartment {Compartment}", parsed);
+                return (await service.SeatAsync(parsed, subject, Callers.ActorOf(http), ct)).ToHttpResult();
+            })
+            .WithMetadata(RegistryOperations.CompartmentsWrite)
+            .Produces(StatusCodes.Status204NoContent)
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status409Conflict);
+
+        compartments.MapGet("/{compartment}/owner/transfer", async (string compartment, IOwnership service, CancellationToken ct) =>
+                Compartment.TryParse(compartment, out var parsed)
+                    ? Summary(await service.GetTransferAsync(parsed, ct), TransferSummary.Of)
+                    : NotACompartment(compartment))
+            .WithMetadata(RegistryOperations.CompartmentsRead)
+            .Produces<TransferSummary>(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status404NotFound);
+
+        compartments.MapPut("/{compartment}/owner/transfer", async (string compartment, ProposeTransferRequest request, HttpContext http, IOwnership service, ILoggerFactory loggers, CancellationToken ct) =>
+            {
+                if (!Compartment.TryParse(compartment, out var parsed))
+                    return NotACompartment(compartment);
+                if (request is null || !RegistryRules.IsSubject(request.To) || (request.Keep is not null && request.Keep.Any(role => !RegistryRules.IsRoleName(role))))
+                    return Invalid("A transfer has the subject of its recipient, and the names of the roles the owner keeps or none.");
+                Written(http, loggers, "proposed the ownership of compartment {Compartment}", parsed);
+                return Summary(await service.ProposeAsync(parsed, request.To, request.Keep, Callers.ActorOf(http), ct), TransferSummary.Of);
+            })
+            .WithMetadata(RegistryOperations.OwnershipWrite)
+            .Produces<TransferSummary>(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status400BadRequest)
+            .ProducesProblem(StatusCodes.Status403Forbidden);
+
+        compartments.MapPost("/{compartment}/owner/transfer/accept", async (string compartment, HttpContext http, IOwnership service, ILoggerFactory loggers, CancellationToken ct) =>
+            {
+                if (!Compartment.TryParse(compartment, out var parsed))
+                    return NotACompartment(compartment);
+                Written(http, loggers, "accepted the ownership of compartment {Compartment}", parsed);
+                return (await service.AcceptAsync(parsed, Callers.ActorOf(http), ct)).ToHttpResult();
+            })
+            .WithMetadata(RegistryOperations.OwnershipWrite)
+            .Produces(StatusCodes.Status204NoContent)
+            .ProducesProblem(StatusCodes.Status403Forbidden)
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status412PreconditionFailed);
+
+        compartments.MapDelete("/{compartment}/owner/transfer", async (string compartment, HttpContext http, IOwnership service, ILoggerFactory loggers, CancellationToken ct) =>
+            {
+                if (!Compartment.TryParse(compartment, out var parsed))
+                    return NotACompartment(compartment);
+                Written(http, loggers, "withdrew the transfer of compartment {Compartment}", parsed);
+                return (await service.CancelAsync(parsed, Callers.ActorOf(http), ct)).ToHttpResult();
+            })
+            .WithMetadata(RegistryOperations.OwnershipWrite)
+            .Produces(StatusCodes.Status204NoContent)
+            .ProducesProblem(StatusCodes.Status403Forbidden)
+            .ProducesProblem(StatusCodes.Status404NotFound);
     }
 
     private static void MapTransition(RouteGroupBuilder compartments, string verb, Func<ICompartments, Compartment, Actor, CancellationToken, Task<Result<CompartmentRecord>>> transition)

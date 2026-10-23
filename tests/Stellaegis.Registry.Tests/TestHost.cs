@@ -28,6 +28,7 @@ internal sealed class TestHost : IDisposable
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddSingleton<IEventPublisher>(Events);
+        services.AddSingleton<TimeProvider>(Clock);
         if (stores is null)
             services.AddStellaegisRegistryInMemory();
         else
@@ -41,6 +42,9 @@ internal sealed class TestHost : IDisposable
     public CapturingEventPublisher Events { get; } = new();
 
     public RecordingRightsSink Sink { get; } = new();
+
+    /// <summary>The clock of the registry, at the real time until a test moves it.</summary>
+    public TestClock Clock { get; } = new();
 
     public IServiceProvider Services => _scope.ServiceProvider;
 
@@ -119,4 +123,16 @@ internal static class Fixtures
     public static readonly Compartment Globex = Compartment.Parse("globex");
     public static readonly string Jane = Guid.Parse("3f2504e0-4f89-41d3-9a0c-0305e82c3301").ToString("N");
     public static readonly string John = Guid.Parse("8d1e3b2a-6c4f-4a8e-9b1d-2f3e4a5b6c7d").ToString("N");
+}
+
+/// <summary>A clock a test moves forward.</summary>
+public sealed class TestClock : TimeProvider
+{
+    private DateTimeOffset _now = DateTimeOffset.UtcNow;
+
+    /// <inheritdoc/>
+    public override DateTimeOffset GetUtcNow() => _now;
+
+    /// <summary>Moves the clock forward.</summary>
+    public void Advance(TimeSpan by) => _now += by;
 }

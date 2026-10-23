@@ -53,8 +53,14 @@ public interface IRoles
 /// <summary>The compartments. A compartment is never deleted: terminated, its name stays taken. Every write names its actor.</summary>
 public interface ICompartments
 {
-    /// <summary>Creates the compartment, active.</summary>
+    /// <summary>Creates the compartment, active, without an owner: one is seated later (<see cref="IOwnership.SeatAsync"/>), by a designation.</summary>
     Task<Result<CompartmentRecord>> CreateAsync(Compartment compartment, string displayName, Actor actor, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Creates the compartment, active, and seats its first owner at once — the gesture of the installation: the owner
+    /// becomes its first member and holds the role of the owner, every administration right of the compartment.
+    /// </summary>
+    Task<Result<CompartmentRecord>> CreateAsync(Compartment compartment, string displayName, string owner, Actor actor, CancellationToken cancellationToken = default);
 
     /// <summary>Renames the compartment.</summary>
     Task<Result<CompartmentRecord>> RenameAsync(Compartment compartment, string displayName, Actor actor, CancellationToken cancellationToken = default);
@@ -189,7 +195,9 @@ internal sealed class Roles(
         {
             if (!RegistryRules.IsRoleName(declaration.Name))
                 return Result.Failure(RegistryErrors.RoleNameInvalid(declaration.Name));
-            var definition = Normalize(declaration.Scope, declaration.Definition);
+            if (declaration.Name == RegistryRoles.Owner && declaration.Scope != RoleScope.Compartment)
+                return Result.Failure(RegistryErrors.RoleReserved(declaration.Name));
+            var definition = Normalize(declaration.Name, declaration.Scope, declaration.Definition);
             var invalid = await ValidateAsync(declaration.Name, declaration.Scope, definition, declaring, cancellationToken).ConfigureAwait(false);
             if (invalid is not null)
                 return Result.Failure(invalid);
@@ -228,9 +236,11 @@ internal sealed class Roles(
         Guard.NotNull(actor);
         if (!RegistryRules.IsRoleName(name))
             return Result.Failure<Role>(RegistryErrors.RoleNameInvalid(name));
+        if (name == RegistryRoles.Owner)
+            return Result.Failure<Role>(RegistryErrors.RoleReserved(name));
         if (await store.GetAsync(name, cancellationToken).ConfigureAwait(false) is not null)
             return Result.Failure<Role>(RegistryErrors.RoleExists(name));
-        definition = Normalize(scope, definition);
+        definition = Normalize(name, scope, definition);
         var invalid = await ValidateAsync(name, scope, definition, null, cancellationToken).ConfigureAwait(false);
         if (invalid is not null)
             return Result.Failure<Role>(invalid);
@@ -251,7 +261,7 @@ internal sealed class Roles(
             return Result.Failure<Role>(RegistryErrors.RoleNotFound(name));
         if (await HeldByAsync(existing, actor, cancellationToken).ConfigureAwait(false))
             return Result.Failure<Role>(RegistryErrors.RoleHeldByAuthor(name));
-        definition = Normalize(existing.Scope, definition);
+        definition = Normalize(name, existing.Scope, definition);
         var invalid = await ValidateAsync(name, existing.Scope, definition, null, cancellationToken).ConfigureAwait(false);
         if (invalid is not null)
             return Result.Failure<Role>(invalid);
@@ -303,7 +313,12 @@ internal sealed class Roles(
     }
 
     // A platform role always requires a second factor (Fred, 2026-10-23): whoever holds the platform holds every
-    // compartment; the flag is set rather than refused, so that a declaration need not repeat it.
+    // compartment; the flag is set rather than refused, so that a declaration need not repeat it. The role of the owner
+    // keeps what it always is, whatever a declaration or a change gives it, but its display name and operations.
+    private static RoleDefinition Normalize(string name, RoleScope scope, RoleDefinition definition) => name == RegistryRoles.Owner
+        ? Normalize(RoleScope.Compartment, RegistryRoles.OwnerDefinition(definition))
+        : Normalize(scope, definition);
+
     private static RoleDefinition Normalize(RoleScope scope, RoleDefinition definition) => definition with
     {
         DisplayName = Guard.NotWhiteSpace(definition.DisplayName),
@@ -367,6 +382,7 @@ internal sealed class Roles(
 internal sealed class Compartments(
     ICompartmentStore store,
     IMembershipStore memberships,
+    Ownership ownership,
     RightsProjector projector,
     IEventPublisher publisher,
     TimeProvider time) : ICompartments
@@ -382,6 +398,20 @@ internal sealed class Compartments(
         await store.SaveAsync(record, cancellationToken).ConfigureAwait(false);
         await PublishAsync(record, actor, cancellationToken).ConfigureAwait(false);
         return Result.Success(record);
+    }
+
+    public async Task<Result<CompartmentRecord>> CreateAsync(Compartment compartment, string displayName, string owner, Actor actor, CancellationToken cancellationToken = default)
+    {
+        owner = RegistryRules.NormalizeSubject(owner);
+        // The owner is checked before the compartment exists: a creation refused leaves nothing behind.
+        var seatable = await ownership.CheckSeatableAsync(owner, actor, cancellationToken).ConfigureAwait(false);
+        if (seatable is not null)
+            return Result.Failure<CompartmentRecord>(seatable);
+        var created = await CreateAsync(compartment, displayName, actor, cancellationToken).ConfigureAwait(false);
+        if (created.IsFailure)
+            return created;
+        var seated = await ownership.SeatAsync(compartment, owner, actor, cancellationToken).ConfigureAwait(false);
+        return seated.IsFailure ? Result.Failure<CompartmentRecord>(seated.Error!) : await GetAsync(compartment, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<Result<CompartmentRecord>> RenameAsync(Compartment compartment, string displayName, Actor actor, CancellationToken cancellationToken = default)
@@ -565,6 +595,8 @@ internal sealed class Memberships(
         Guard.NotNull(actor);
         if (!await store.IsMemberAsync(subject, compartment, cancellationToken).ConfigureAwait(false))
             return Result.Success();
+        if (AssignmentRules.Own(subject, actor) is { } own)
+            return Result.Failure(own);
         // Removing a member removes their roles: the actor may assign each of them, or the removal would strip a role
         // beyond the actor's list — the manager of the accesses removing whoever made them so.
         var held = (await store.ListByUserAsync(subject, cancellationToken).ConfigureAwait(false))
@@ -707,7 +739,7 @@ internal sealed class Operators(
 /// and so assigns none. Access answered first whether the actor may assign at all, on the operation of the route;
 /// this answers which roles.
 /// </summary>
-internal sealed class AssignmentRules(IRoleStore roles, IMembershipStore memberships, IOperatorStore operators)
+internal sealed class AssignmentRules(IRoleStore roles, IMembershipStore memberships, IOperatorStore operators, ICompartmentStore compartments)
 {
     /// <summary>Whether the actor is a job, <c>job:…</c>: the installation, a scheduled task.</summary>
     public static bool IsJob(Actor actor) => actor.Value.StartsWith(Actor.JobPrefix, StringComparison.Ordinal);
@@ -722,14 +754,29 @@ internal sealed class AssignmentRules(IRoleStore roles, IMembershipStore members
     /// </summary>
     public async Task<Error?> CheckAsync(Actor actor, string subject, Compartment? compartment, IReadOnlyCollection<string> roleNames, CancellationToken cancellationToken)
     {
+        // The owner of the compartment: nobody else touches their membership or roles there, an operator included —
+        // the platform's rescue alone replaces an owner. The installation, which seats them, may still give them roles.
+        var owner = compartment is null ? null : (await compartments.GetAsync(compartment, cancellationToken).ConfigureAwait(false))?.Owner;
+        var self = Own(subject, actor) is not null;
+        if (owner == subject && !self && !IsJob(actor))
+            return RegistryErrors.OwnerUntouchable(subject, compartment!);
+        // The role of the owner goes with the ownership, for everyone.
+        if (roleNames.Contains(RegistryRoles.Owner, StringComparer.Ordinal))
+            return RegistryErrors.RoleReserved(RegistryRoles.Owner);
         if (IsJob(actor))
-            return null;
-        if (Own(subject, actor) is { } own)
-            return own;
-        if (roleNames.Count == 0)
             return null;
 
         var all = (await roles.ListAsync(cancellationToken: cancellationToken).ConfigureAwait(false)).ToDictionary(role => role.Name, StringComparer.Ordinal);
+        if (self)
+        {
+            // The one exception to I7: the owner may give themselves business roles, and take them back, under their
+            // own name — their list covers every role, and they would reach the same by a manager they name.
+            var business = roleNames.Count > 0 && roleNames.All(name => all.TryGetValue(name, out var role) && role.Category == RoleCategory.Business);
+            return owner == subject && business ? null : RegistryErrors.OwnRoles(subject);
+        }
+        if (roleNames.Count == 0)
+            return null;
+
         var held = new List<string>();
         if (RegistryRules.IsSubject(actor.Value))
         {
@@ -752,5 +799,203 @@ internal sealed class AssignmentRules(IRoleStore roles, IMembershipStore members
                 return RegistryErrors.RoleNotAssignable(name);
         }
         return null;
+    }
+}
+
+/// <summary>
+/// The ownership of a compartment: one owner, carried by the compartment, its legal holder. A prerogative rather than a
+/// permission: the owner holds the role of the owner — every administration right of the compartment, a second factor
+/// required —, which nobody assigns, unassigns or takes from them, themselves included, but by a transfer; nobody
+/// else changes their membership or roles there. The transfer is proposed by the owner and accepted by its recipient,
+/// everything checked again at the acceptance; the outgoing owner keeps the roles they chose.
+/// </summary>
+public interface IOwnership
+{
+    /// <summary>
+    /// Seats the first owner of a compartment that has none — a designation, or the gesture of the installation through
+    /// <see cref="ICompartments.CreateAsync(Compartment, string, string, Actor, CancellationToken)"/>: the owner becomes a
+    /// member and holds the role of the owner. Nobody seats themselves. A compartment with an owner is refused
+    /// (<see cref="RegistryErrors.OwnerSeated"/>): its ownership changes by a transfer only.
+    /// </summary>
+    Task<Result> SeatAsync(Compartment compartment, string owner, Actor actor, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Proposes the ownership to a member, the owner being the actor; replaces a transfer waiting. <paramref name="keep"/>
+    /// names the roles the outgoing owner keeps once it is done, each held now; every role they hold but that of the owner
+    /// when <see langword="null"/>. It lapses after <see cref="RegistryRoles.TransferLifetime"/>.
+    /// </summary>
+    Task<Result<OwnershipTransfer>> ProposeAsync(Compartment compartment, string to, IReadOnlyCollection<string>? keep, Actor actor, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Accepts the transfer, the recipient being the actor. Everything is checked again, all or nothing: the proposer still
+    /// owns the compartment, which is active, and the recipient is still an active member.
+    /// </summary>
+    Task<Result> AcceptAsync(Compartment compartment, Actor actor, CancellationToken cancellationToken = default);
+
+    /// <summary>Withdraws the transfer waiting: the owner cancels it, or the recipient declines it.</summary>
+    Task<Result> CancelAsync(Compartment compartment, Actor actor, CancellationToken cancellationToken = default);
+
+    /// <summary>The transfer waiting for the compartment, or a failure.</summary>
+    Task<Result<OwnershipTransfer>> GetTransferAsync(Compartment compartment, CancellationToken cancellationToken = default);
+}
+
+internal sealed class Ownership(
+    ICompartmentStore store,
+    IUserStore users,
+    IMembershipStore memberships,
+    IRoleStore roles,
+    RightsProjector projector,
+    IEventPublisher publisher,
+    TimeProvider time) : IOwnership
+{
+    public async Task<Result> SeatAsync(Compartment compartment, string owner, Actor actor, CancellationToken cancellationToken = default)
+    {
+        Guard.NotNull(compartment);
+        owner = RegistryRules.NormalizeSubject(owner);
+        var seatable = await CheckSeatableAsync(owner, actor, cancellationToken).ConfigureAwait(false);
+        if (seatable is not null)
+            return Result.Failure(seatable);
+        var record = await store.GetAsync(compartment, cancellationToken).ConfigureAwait(false);
+        if (record is null)
+            return Result.Failure(RegistryErrors.CompartmentNotFound(compartment));
+        if (record.Status == CompartmentStatus.Terminated)
+            return Result.Failure(RegistryErrors.CompartmentTerminated(compartment));
+        if (record.Owner is not null)
+            return Result.Failure(RegistryErrors.OwnerSeated(compartment));
+
+        await EnsureOwnerRoleAsync(actor, cancellationToken).ConfigureAwait(false);
+        var now = time.GetUtcNow();
+        if (!await store.SeatOwnerAsync(compartment, owner, new Stamp(now, actor), cancellationToken).ConfigureAwait(false))
+            return Result.Failure(RegistryErrors.OwnerSeated(compartment));
+        await projector.ProjectMembershipsAsync(owner, cancellationToken).ConfigureAwait(false);
+        await projector.ProjectUserGrantsAsync(owner, compartment, cancellationToken).ConfigureAwait(false);
+        await publisher.PublishAsync(new OwnershipChangedEvent { OccurredAt = now, Compartment = compartment, Owner = owner, By = actor }, cancellationToken).ConfigureAwait(false);
+        return Result.Success();
+    }
+
+    public async Task<Result<OwnershipTransfer>> ProposeAsync(Compartment compartment, string to, IReadOnlyCollection<string>? keep, Actor actor, CancellationToken cancellationToken = default)
+    {
+        Guard.NotNull(compartment);
+        Guard.NotNull(actor);
+        to = RegistryRules.NormalizeSubject(to);
+        var record = await store.GetAsync(compartment, cancellationToken).ConfigureAwait(false);
+        if (record is null)
+            return Result.Failure<OwnershipTransfer>(RegistryErrors.CompartmentNotFound(compartment));
+        if (record.Owner is null || !IsPerson(actor, record.Owner))
+            return Result.Failure<OwnershipTransfer>(RegistryErrors.NotOwner(compartment));
+        if (to == record.Owner)
+            return Result.Failure<OwnershipTransfer>(RegistryErrors.TransferToSelf(compartment));
+        if (await WhyNotAsync(record, to, cancellationToken).ConfigureAwait(false) is { } why)
+            return Result.Failure<OwnershipTransfer>(RegistryErrors.TransferStale(compartment, why));
+
+        var held = await HeldAsync(record.Owner, compartment, cancellationToken).ConfigureAwait(false);
+        var kept = keep is null ? held : keep.Distinct(StringComparer.Ordinal).ToList();
+        if (kept.FirstOrDefault(role => !held.Contains(role, StringComparer.Ordinal)) is { } notHeld)
+            return Result.Failure<OwnershipTransfer>(RegistryErrors.RoleNotHeld(notHeld));
+
+        var now = time.GetUtcNow();
+        var transfer = new OwnershipTransfer(compartment, record.Owner, to, kept, new Stamp(now, actor), now + RegistryRoles.TransferLifetime);
+        await store.SaveTransferAsync(transfer, cancellationToken).ConfigureAwait(false);
+        return Result.Success(transfer);
+    }
+
+    public async Task<Result> AcceptAsync(Compartment compartment, Actor actor, CancellationToken cancellationToken = default)
+    {
+        Guard.NotNull(compartment);
+        Guard.NotNull(actor);
+        var transfer = await store.GetTransferAsync(compartment, cancellationToken).ConfigureAwait(false);
+        if (transfer is null)
+            return Result.Failure(RegistryErrors.TransferNotFound(compartment));
+        if (!IsPerson(actor, transfer.To))
+            return Result.Failure(RegistryErrors.NotRecipient(compartment));
+        var now = time.GetUtcNow();
+        if (now >= transfer.ExpiresAt)
+        {
+            await store.DeleteTransferAsync(compartment, cancellationToken).ConfigureAwait(false);
+            return Result.Failure(RegistryErrors.TransferExpired(compartment));
+        }
+
+        // Everything again, all or nothing: what the proposal assumed may have changed since.
+        var record = await store.GetAsync(compartment, cancellationToken).ConfigureAwait(false);
+        if (record is null || record.Owner != transfer.From)
+            return Result.Failure(RegistryErrors.TransferStale(compartment, "the proposer no longer owns it"));
+        if (await WhyNotAsync(record, transfer.To, cancellationToken).ConfigureAwait(false) is { } why)
+            return Result.Failure(RegistryErrors.TransferStale(compartment, why));
+
+        var dropped = (await HeldAsync(transfer.From, compartment, cancellationToken).ConfigureAwait(false))
+            .Where(role => !transfer.Kept.Contains(role, StringComparer.Ordinal)).ToList();
+        await EnsureOwnerRoleAsync(actor, cancellationToken).ConfigureAwait(false);
+        if (!await store.TransferOwnershipAsync(transfer, dropped, new Stamp(now, actor), cancellationToken).ConfigureAwait(false))
+            return Result.Failure(RegistryErrors.TransferStale(compartment, "the proposer no longer owns it"));
+
+        await projector.ProjectMembershipsAsync(transfer.To, cancellationToken).ConfigureAwait(false);
+        await projector.ProjectUserGrantsAsync(transfer.To, compartment, cancellationToken).ConfigureAwait(false);
+        await projector.ProjectUserGrantsAsync(transfer.From, compartment, cancellationToken).ConfigureAwait(false);
+        await publisher.PublishAsync(new OwnershipChangedEvent { OccurredAt = now, Compartment = compartment, Owner = transfer.To, Previous = transfer.From, By = actor }, cancellationToken).ConfigureAwait(false);
+        return Result.Success();
+    }
+
+    public async Task<Result> CancelAsync(Compartment compartment, Actor actor, CancellationToken cancellationToken = default)
+    {
+        Guard.NotNull(compartment);
+        Guard.NotNull(actor);
+        var transfer = await store.GetTransferAsync(compartment, cancellationToken).ConfigureAwait(false);
+        if (transfer is null)
+            return Result.Failure(RegistryErrors.TransferNotFound(compartment));
+        if (!IsPerson(actor, transfer.From) && !IsPerson(actor, transfer.To))
+            return Result.Failure(RegistryErrors.NotOwner(compartment));
+        await store.DeleteTransferAsync(compartment, cancellationToken).ConfigureAwait(false);
+        return Result.Success();
+    }
+
+    public async Task<Result<OwnershipTransfer>> GetTransferAsync(Compartment compartment, CancellationToken cancellationToken = default)
+        => await store.GetTransferAsync(Guard.NotNull(compartment), cancellationToken).ConfigureAwait(false) is { } transfer
+            ? Result.Success(transfer)
+            : Result.Failure<OwnershipTransfer>(RegistryErrors.TransferNotFound(compartment));
+
+    /// <summary>The refusal when <paramref name="owner"/> cannot be seated by <paramref name="actor"/>: an active user, never by themselves.</summary>
+    internal async Task<Error?> CheckSeatableAsync(string owner, Actor actor, CancellationToken cancellationToken)
+    {
+        Guard.NotNull(actor);
+        if (AssignmentRules.Own(owner, actor) is { } own)
+            return own;
+        var user = await users.GetAsync(owner, cancellationToken).ConfigureAwait(false);
+        if (user is null)
+            return RegistryErrors.UserNotFound(owner);
+        return user.Status == UserStatus.Deactivated ? RegistryErrors.UserDeactivated(owner) : null;
+    }
+
+    private static bool IsPerson(Actor actor, string subject)
+        => RegistryRules.IsSubject(actor.Value) && RegistryRules.NormalizeSubject(actor.Value) == subject;
+
+    // Why the recipient cannot take the compartment now, or null: it is active, and they are an active member of it.
+    private async Task<string?> WhyNotAsync(CompartmentRecord record, string to, CancellationToken cancellationToken)
+    {
+        if (record.Status != CompartmentStatus.Active)
+            return "the compartment is not active";
+        var user = await users.GetAsync(to, cancellationToken).ConfigureAwait(false);
+        if (user is null || user.Status != UserStatus.Active)
+            return "the recipient is not an active user";
+        return await memberships.IsMemberAsync(to, record.Compartment, cancellationToken).ConfigureAwait(false)
+            ? null
+            : "the recipient is not a member";
+    }
+
+    // The roles the owner holds in the compartment, but that of the owner.
+    private async Task<List<string>> HeldAsync(string owner, Compartment compartment, CancellationToken cancellationToken)
+        => (await memberships.ListByUserAsync(owner, cancellationToken).ConfigureAwait(false))
+            .Where(membership => membership.Compartment == compartment)
+            .SelectMany(membership => membership.Roles)
+            .Where(role => role != RegistryRoles.Owner)
+            .ToList();
+
+    // The role of the owner exists before anyone holds it: an application that never declared it gets it without operations.
+    private async Task EnsureOwnerRoleAsync(Actor actor, CancellationToken cancellationToken)
+    {
+        if (await roles.GetAsync(RegistryRoles.Owner, cancellationToken).ConfigureAwait(false) is not null)
+            return;
+        var definition = RegistryRoles.OwnerDefinition(null);
+        await roles.SaveAsync(new Role(RegistryRoles.Owner, RoleScope.Compartment, definition.Category, definition.DisplayName, Declared: true,
+            definition.Operations, definition.Assignable!, definition.RequiresSecondFactor, Audit.CreatedBy(actor, time.GetUtcNow())), cancellationToken).ConfigureAwait(false);
     }
 }

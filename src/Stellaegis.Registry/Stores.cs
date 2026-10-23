@@ -11,8 +11,30 @@ public interface ICompartmentStore
     /// <summary>Every compartment, terminated ones included, by name.</summary>
     Task<IReadOnlyList<CompartmentRecord>> ListAsync(CancellationToken cancellationToken = default);
 
-    /// <summary>Inserts the compartment, or replaces its display name and status.</summary>
+    /// <summary>Inserts the compartment, or replaces its display name and status; never its owner, which only the two operations below write.</summary>
     Task SaveAsync(CompartmentRecord compartment, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Seats the first owner of a compartment that has none, at once: the owner, the membership if missing, the role of
+    /// the owner. <see langword="false"/>, writing nothing, when the compartment has an owner already.
+    /// </summary>
+    Task<bool> SeatOwnerAsync(Compartment compartment, string owner, Stamp granted, CancellationToken cancellationToken = default);
+
+    /// <summary>The transfer of ownership waiting for the compartment, or <see langword="null"/>.</summary>
+    Task<OwnershipTransfer?> GetTransferAsync(Compartment compartment, CancellationToken cancellationToken = default);
+
+    /// <summary>Records a transfer, replacing the one waiting for the compartment.</summary>
+    Task SaveTransferAsync(OwnershipTransfer transfer, CancellationToken cancellationToken = default);
+
+    /// <summary>Removes the transfer waiting for the compartment; nothing when there is none.</summary>
+    Task DeleteTransferAsync(Compartment compartment, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Carries the transfer out, at once: the recipient becomes the owner and receives the role of the owner, the outgoing
+    /// owner loses it and the roles of <paramref name="dropped"/>, the transfer is removed. <see langword="false"/>,
+    /// writing nothing, when the compartment is no longer owned by <see cref="OwnershipTransfer.From"/>.
+    /// </summary>
+    Task<bool> TransferOwnershipAsync(OwnershipTransfer transfer, IReadOnlyCollection<string> dropped, Stamp granted, CancellationToken cancellationToken = default);
 }
 
 /// <summary>The users, the projection of the accounts of Identity.</summary>

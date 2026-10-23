@@ -272,4 +272,30 @@ public sealed class AdminEndpointsTests
 
         Assert.Contains("AddStellaegisStartupCheck", exception.Message);
     }
+
+    [Fact]
+    public async Task A_compartment_is_created_with_its_owner_and_its_ownership_transferred_through_the_routes()
+    {
+        await using var app = await StartAsync(MapPerOperation);
+        var operatorClient = app.ClientAs("operator", Everything);
+
+        var created = await operatorClient.PostAsJsonAsync("/api/admin/registry/compartments", new CreateCompartmentRequest("globex", "Globex", Jane), Ct);
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        Assert.Equal(Jane, (await created.Content.ReadFromJsonAsync<CompartmentSummary>(Ct))!.Owner);
+        Assert.Equal(HttpStatusCode.NoContent, (await operatorClient.PutAsync($"/api/admin/registry/memberships/globex/{John}", null, Ct)).StatusCode);
+        var seated = await operatorClient.PutAsync($"/api/admin/registry/compartments/globex/owner/{John}", null, Ct);
+        Assert.Equal(RegistryErrors.OwnerSeatedCode, await seated.CodeOfAsync(Ct));
+
+        var proposed = await app.ClientAs(Jane, Everything).PutAsJsonAsync("/api/admin/registry/compartments/globex/owner/transfer", new ProposeTransferRequest(John), Ct);
+        Assert.Equal(HttpStatusCode.OK, proposed.StatusCode);
+        var transfer = (await operatorClient.GetFromJsonAsync<TransferSummary>("/api/admin/registry/compartments/globex/owner/transfer", Ct))!;
+        Assert.Equal((Jane, John), (transfer.From, transfer.To));
+        var notRecipient = await operatorClient.PostAsync("/api/admin/registry/compartments/globex/owner/transfer/accept", null, Ct);
+        Assert.Equal(RegistryErrors.NotRecipientCode, await notRecipient.CodeOfAsync(Ct));
+
+        Assert.Equal(HttpStatusCode.NoContent, (await app.ClientAs(John, Everything).PostAsync("/api/admin/registry/compartments/globex/owner/transfer/accept", null, Ct)).StatusCode);
+        Assert.Equal(John, (await operatorClient.GetFromJsonAsync<CompartmentSummary>("/api/admin/registry/compartments/globex", Ct))!.Owner);
+        Assert.Equal(HttpStatusCode.NotFound, (await operatorClient.DeleteAsync("/api/admin/registry/compartments/globex/owner/transfer", Ct)).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await app.ClientAs(Jane, Reads).PutAsJsonAsync("/api/admin/registry/compartments/globex/owner/transfer", new ProposeTransferRequest(Jane), Ct)).StatusCode);
+    }
 }

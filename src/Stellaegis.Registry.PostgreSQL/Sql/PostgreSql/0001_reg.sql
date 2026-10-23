@@ -7,10 +7,11 @@
 -- data rights by the installation. The record of the scripts applied is the installation's,
 -- reg._schema_migrations, not this script's.
 --
--- Eight tables: the compartments, the users (the projection of the accounts of Identity), the
--- catalogue of the operations the modules declare, the roles and their operations, and the two
--- parallel models of the rights — the persons in the compartments (memberships, member_roles) and
--- the operators of the platform (operator_roles) — never mixed. The effective rights are not here:
+-- Eleven tables: the compartments and the transfers of their ownership with the roles a transfer
+-- keeps, the users (the projection of the accounts of Identity), the catalogue of the operations the
+-- modules declare, the roles with their operations and the roles they let their holder assign, and
+-- the two parallel models of the rights — the persons in the compartments (memberships,
+-- member_roles) and the operators of the platform (operator_roles) — never mixed. The effective rights are not here:
 -- the registry computes them from these tables and hands them to the decision point, Access.
 --
 -- No surrogate key: nothing joins these tables on anything but their natural keys. No row-level
@@ -40,7 +41,8 @@
 -- ── Compartments ─────────────────────────────────────────────────────────────
 -- A compartment is never deleted and its name is never reused: terminated is a status, and the row
 -- stays as a tombstone. Suspended keeps the memberships and roles; the rights are withdrawn until it
--- resumes.
+-- resumes. Its owner, the legal holder of the compartment, is absent while none was seated — a
+-- compartment created for a designation —; seated, it changes by a transfer only.
 
 create table reg.compartments (
   compartment   varchar(63)  not null,
@@ -50,12 +52,14 @@ create table reg.compartments (
   created_by    varchar(128) not null,
   modified_at   timestamptz  not null,
   modified_by   varchar(128) not null,
+  owner_subject varchar(32),
 
   constraint pk_compartments primary key (compartment),
   constraint ck_compartments_compartment check (
     compartment ~ '^[a-z][a-z0-9-]{1,61}[a-z0-9]$' and compartment !~ '--'),
   constraint ck_compartments_display_name check (char_length(display_name) between 1 and 200),
   constraint ck_compartments_status check (status in ('active', 'suspended', 'terminated')),
+  constraint ck_compartments_owner_subject check (owner_subject ~ '^[0-9a-f]{32}$'),
   constraint ck_compartments_created_by check (created_by ~ '^[^[:space:][:cntrl:]]([^[:cntrl:]]{0,126}[^[:space:][:cntrl:]])?$'),
   constraint ck_compartments_modified_by check (modified_by ~ '^[^[:space:][:cntrl:]]([^[:cntrl:]]{0,126}[^[:space:][:cntrl:]])?$')
 );
@@ -63,6 +67,7 @@ create table reg.compartments (
 comment on table  reg.compartments              is 'The compartments of the application. One row per compartment, never deleted: a name is never reused.';
 comment on column reg.compartments.compartment  is 'The name of the compartment, the one the frame and the routes use.';
 comment on column reg.compartments.status       is 'active, suspended (rights withdrawn, memberships kept) or terminated (memberships gone, the row stays).';
+comment on column reg.compartments.owner_subject is 'The subject of the owner, the legal holder of the compartment; null while none was seated. Changed by a transfer only.';
 comment on column reg.compartments.created_by   is 'The actor who created the compartment: the installation, or an operator. Never defaulted.';
 comment on column reg.compartments.modified_by  is 'The actor of the last change; the creator, until a change.';
 
@@ -90,6 +95,9 @@ create table reg.users (
 );
 
 comment on table  reg.users          is 'The projection of the accounts of Identity. One row per subject.';
+
+alter table reg.compartments
+  add constraint fk_compartments_owner foreign key (owner_subject) references reg.users (subject);
 comment on column reg.users.subject  is 'The sub of the account: a GUID written as 32 hex digits.';
 comment on column reg.users.status   is 'active, or deactivated: blocked or deleted in Identity, rights withdrawn, memberships kept.';
 comment on column reg.users.created_by  is 'The actor who recorded the user: the person themselves when they registered, or the installation.';
@@ -250,3 +258,38 @@ comment on table reg.operator_roles is 'The platform roles of each operator. One
 comment on column reg.operator_roles.granted_by is 'The actor who assigned the role.';
 
 create index ix_operator_roles_role on reg.operator_roles (role);
+
+-- ── Transfers of ownership ───────────────────────────────────────────────────
+-- The ownership is proposed by the owner and accepted by its recipient, a member, within its lifetime:
+-- one transfer waiting per compartment, a new one replacing it. The outgoing owner keeps the roles
+-- named in ownership_transfer_kept_roles; the others go with the ownership.
+
+create table reg.ownership_transfers (
+  compartment   varchar(63)  not null,
+  from_subject  varchar(32)  not null,
+  to_subject    varchar(32)  not null,
+  proposed_at   timestamptz  not null,
+  proposed_by   varchar(128) not null,
+  expires_at    timestamptz  not null,
+
+  constraint pk_ownership_transfers primary key (compartment),
+  constraint ck_ownership_transfers_parties check (from_subject <> to_subject),
+  constraint ck_ownership_transfers_expires_at check (expires_at > proposed_at),
+  constraint ck_ownership_transfers_proposed_by check (proposed_by ~ '^[^[:space:][:cntrl:]]([^[:cntrl:]]{0,126}[^[:space:][:cntrl:]])?$'),
+  constraint fk_ownership_transfers_compartment foreign key (compartment) references reg.compartments (compartment),
+  constraint fk_ownership_transfers_from foreign key (from_subject) references reg.users (subject),
+  constraint fk_ownership_transfers_to foreign key (to_subject) references reg.users (subject)
+);
+
+comment on table reg.ownership_transfers is 'The transfer of ownership waiting for each compartment: proposed by the owner, accepted or declined by its recipient. One row per compartment.';
+
+create table reg.ownership_transfer_kept_roles (
+  compartment  varchar(63)  not null,
+  role         varchar(63)  not null,
+
+  constraint pk_ownership_transfer_kept_roles primary key (compartment, role),
+  constraint fk_ownership_transfer_kept_roles_transfer foreign key (compartment) references reg.ownership_transfers (compartment) on delete cascade,
+  constraint fk_ownership_transfer_kept_roles_role foreign key (role) references reg.roles (role)
+);
+
+comment on table reg.ownership_transfer_kept_roles is 'The roles the outgoing owner keeps once the transfer is done. One row per (compartment, role); gone with the transfer.';

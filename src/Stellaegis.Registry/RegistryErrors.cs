@@ -59,6 +59,36 @@ public static class RegistryErrors
     /// <summary>The code of <see cref="OwnRoles"/>.</summary>
     public const string OwnRolesCode = "Role.OwnRoles";
 
+    /// <summary>The code of <see cref="RoleReserved"/>.</summary>
+    public const string RoleReservedCode = "Role.Reserved";
+
+    /// <summary>The code of <see cref="OwnerUntouchable"/>.</summary>
+    public const string OwnerUntouchableCode = "Owner.Untouchable";
+
+    /// <summary>The code of <see cref="OwnerSeated"/>.</summary>
+    public const string OwnerSeatedCode = "Owner.Seated";
+
+    /// <summary>The code of <see cref="NotOwner"/>.</summary>
+    public const string NotOwnerCode = "Owner.NotOwner";
+
+    /// <summary>The code of <see cref="RoleNotHeld"/>.</summary>
+    public const string RoleNotHeldCode = "Role.NotHeld";
+
+    /// <summary>The code of <see cref="TransferNotFound"/>.</summary>
+    public const string TransferNotFoundCode = "Transfer.NotFound";
+
+    /// <summary>The code of <see cref="TransferToSelf"/>.</summary>
+    public const string TransferToSelfCode = "Transfer.ToSelf";
+
+    /// <summary>The code of <see cref="NotRecipient"/>.</summary>
+    public const string NotRecipientCode = "Transfer.NotRecipient";
+
+    /// <summary>The code of <see cref="TransferExpired"/>.</summary>
+    public const string TransferExpiredCode = "Transfer.Expired";
+
+    /// <summary>The code of <see cref="TransferStale"/>.</summary>
+    public const string TransferStaleCode = "Transfer.Stale";
+
     /// <summary>The code of <see cref="UnknownOperation"/>.</summary>
     public const string UnknownOperationCode = "Catalog.UnknownOperation";
 
@@ -135,6 +165,46 @@ public static class RegistryErrors
     /// <summary>Nobody changes their own memberships or roles, in either direction: who wants to drop a role asks for it.</summary>
     public static Error OwnRoles(string subject)
         => Error.Forbidden(OwnRolesCode, $"User '{subject}' is the author of the change: nobody changes their own memberships or roles.");
+
+    /// <summary>The role is reserved to the registry: the role of the owner is seated and transferred with the ownership, never created, assigned nor unassigned.</summary>
+    public static Error RoleReserved(string role)
+        => Error.Forbidden(RoleReservedCode, $"Role '{role}' is reserved: it goes with the ownership of a compartment, seated or transferred, never assigned.");
+
+    /// <summary>The user owns the compartment: nobody else changes their membership or roles there; a platform's rescue alone replaces an owner.</summary>
+    public static Error OwnerUntouchable(string subject, Compartment compartment)
+        => Error.Forbidden(OwnerUntouchableCode, $"User '{subject}' owns '{compartment}': nobody else changes their membership or roles there.");
+
+    /// <summary>The compartment has an owner already: it changes by a transfer only.</summary>
+    public static Error OwnerSeated(Compartment compartment)
+        => Error.Conflict(OwnerSeatedCode, $"Compartment '{compartment}' has an owner already; the ownership changes by a transfer only.");
+
+    /// <summary>The author of the change is not the owner of the compartment.</summary>
+    public static Error NotOwner(Compartment compartment)
+        => Error.Forbidden(NotOwnerCode, $"The author of the change is not the owner of '{compartment}'.");
+
+    /// <summary>The outgoing owner would keep a role they do not hold.</summary>
+    public static Error RoleNotHeld(string role)
+        => Error.Validation(RoleNotHeldCode, $"Role '{role}' is not held by the owner in the compartment: only a role held can be kept.");
+
+    /// <summary>No transfer of the ownership of the compartment is waiting.</summary>
+    public static Error TransferNotFound(Compartment compartment)
+        => Error.NotFound(TransferNotFoundCode, $"No transfer of the ownership of '{compartment}' is waiting.");
+
+    /// <summary>The owner proposed the ownership to themselves.</summary>
+    public static Error TransferToSelf(Compartment compartment)
+        => Error.Validation(TransferToSelfCode, $"The owner of '{compartment}' cannot transfer it to themselves.");
+
+    /// <summary>The author of the answer is not the recipient of the transfer.</summary>
+    public static Error NotRecipient(Compartment compartment)
+        => Error.Forbidden(NotRecipientCode, $"The author of the answer is not the recipient of the transfer of '{compartment}'.");
+
+    /// <summary>The transfer lapsed, unanswered: the owner proposes it again.</summary>
+    public static Error TransferExpired(Compartment compartment)
+        => Error.PreconditionFailed(TransferExpiredCode, $"The transfer of the ownership of '{compartment}' lapsed unanswered.");
+
+    /// <summary>What the transfer assumed no longer holds: the proposer is no longer the owner, the recipient no longer an active member, or the compartment no longer active.</summary>
+    public static Error TransferStale(Compartment compartment, string why)
+        => Error.PreconditionFailed(TransferStaleCode, $"The transfer of the ownership of '{compartment}' no longer holds: {why}.");
 
     /// <summary>The operation is not in the catalogue: no module declares it.</summary>
     public static Error UnknownOperation(string operation)

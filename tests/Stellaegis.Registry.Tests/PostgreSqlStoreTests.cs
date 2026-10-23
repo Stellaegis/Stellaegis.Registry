@@ -93,6 +93,9 @@ public sealed class PostgreSqlStoreTests(PostgreSqlFixture database) : IAsyncLif
     [InlineData("insert into reg.roles values ('reader', 'compartment', 'business', 'x', true, 'none', true, false, now(), 'job:tests', now(), 'job:tests')", "23514")]
     [InlineData("insert into reg.roles values ('ops', 'platform', 'administration', 'x', true, 'none', false, false, now(), 'job:tests', now(), 'job:tests')", "23514")]
     [InlineData("insert into reg.role_assignable_roles values ('nobody', 'nobody')", "23503")]
+    [InlineData("insert into reg.compartments values ('acme', 'x', 'active', now(), 'job:tests', now(), 'job:tests', 'jane')", "23514")]
+    [InlineData("insert into reg.ownership_transfers values ('acme', '3f2504e04f8941d39a0c0305e82c3301', '3f2504e04f8941d39a0c0305e82c3301', now(), 'job:tests', now() + interval '7 days')", "23514")]
+    [InlineData("insert into reg.ownership_transfers values ('nowhere', '3f2504e04f8941d39a0c0305e82c3301', '8d1e3b2a6c4f4a8e9b1d2f3e4a5b6c7d', now(), 'job:tests', now() + interval '7 days')", "23503")]
     [InlineData("insert into reg.role_operations values ('nobody', 'items.read')", "23503")]
     [InlineData("insert into reg.memberships values ('3f2504e04f8941d39a0c0305e82c3301', 'nowhere', now(), 'job:tests')", "23503")]
     [InlineData("insert into reg.operator_roles values ('3f2504e04f8941d39a0c0305e82c3301', 'nobody', now(), 'job:tests')", "23503")]
@@ -315,5 +318,40 @@ public sealed class PostgreSqlStoreTests(PostgreSqlFixture database) : IAsyncLif
         await Roles.DeleteAsync("clerk", Ct);
         await Roles.DeleteAsync("manager", Ct);
         Assert.Null(await Roles.GetAsync("clerk", Ct));
+    }
+
+    [Fact]
+    public async Task The_ownership_is_seated_once_and_transferred_at_once_or_not_at_all()
+    {
+        await SeedAsync();
+        var initech = Compartment.Parse($"initech-{Guid.NewGuid():N}"[..20]);
+        await Compartments.SaveAsync(new CompartmentRecord(initech, "Initech", CompartmentStatus.Active, Seeded), Ct);
+        await Roles.SaveAsync(new Role(RegistryRoles.Owner, RoleScope.Compartment, RoleCategory.Administration, "Owner", Declared: true, [],
+            AssignableRoles.Every(CompartmentRoleSelector.All), true, Seeded), Ct);
+
+        Assert.True(await Compartments.SeatOwnerAsync(initech, Jane, Granted, Ct));
+        Assert.False(await Compartments.SeatOwnerAsync(initech, John, Granted, Ct));
+        Assert.Equal(Jane, (await Compartments.GetAsync(initech, Ct))!.Owner);
+        await Compartments.SaveAsync(new CompartmentRecord(initech, "Initech SA", CompartmentStatus.Active, Seeded), Ct);
+        Assert.Equal(Jane, (await Compartments.GetAsync(initech, Ct))!.Owner);   // a save never writes the owner
+        await Memberships.AssignRoleAsync(Jane, initech, "reader", Granted, Ct);
+        await Memberships.AddAsync(John, initech, Granted, Ct);
+
+        var transfer = new OwnershipTransfer(initech, Jane, John, ["reader"], Granted, Now.AddDays(7));
+        await Compartments.SaveTransferAsync(transfer, Ct);
+        var read = (await Compartments.GetTransferAsync(initech, Ct))!;
+        Assert.Equal((Jane, John, Now.AddDays(7)), (read.From, read.To, read.ExpiresAt));
+        Assert.Equal(["reader"], read.Kept);
+
+        // From a stale owner, nothing is written.
+        Assert.False(await Compartments.TransferOwnershipAsync(transfer with { From = John, To = Jane }, [], Granted, Ct));
+        Assert.Equal(Jane, (await Compartments.GetAsync(initech, Ct))!.Owner);
+
+        Assert.True(await Compartments.TransferOwnershipAsync(transfer, ["reader"], Granted, Ct));
+        Assert.Equal(John, (await Compartments.GetAsync(initech, Ct))!.Owner);
+        var members = (await Memberships.ListByCompartmentAsync(initech, Ct)).ToDictionary(m => m.Subject);
+        Assert.Equal([RegistryRoles.Owner], members[John].Roles);
+        Assert.Empty(members[Jane].Roles);
+        Assert.Null(await Compartments.GetTransferAsync(initech, Ct));
     }
 }

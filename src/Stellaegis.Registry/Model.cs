@@ -40,7 +40,46 @@ public sealed record Audit(Stamp Created, Stamp Modified)
 /// <param name="DisplayName">What people call it.</param>
 /// <param name="Status">Its state.</param>
 /// <param name="Audit">Who created it and who last changed it, and when.</param>
-public sealed record CompartmentRecord(Compartment Compartment, string DisplayName, CompartmentStatus Status, Audit Audit);
+/// <param name="Owner">
+/// The subject of its owner, the legal holder of the compartment, or <see langword="null"/> while none was seated — a
+/// compartment created for a designation by invitation. Once seated, the owner changes only by a transfer.
+/// </param>
+public sealed record CompartmentRecord(Compartment Compartment, string DisplayName, CompartmentStatus Status, Audit Audit, string? Owner = null);
+
+/// <summary>
+/// A transfer of the ownership of a compartment, proposed by its owner and waiting for its recipient: the ownership is
+/// the legal holding of the compartment, which engages whoever takes it, so it is accepted, never imposed.
+/// </summary>
+/// <param name="Compartment">The compartment.</param>
+/// <param name="From">The owner who proposed it.</param>
+/// <param name="To">The member who would become the owner.</param>
+/// <param name="Kept">The roles the outgoing owner keeps in the compartment once it is done; the others go with the ownership.</param>
+/// <param name="Proposed">When and by whom it was proposed.</param>
+/// <param name="ExpiresAt">When it lapses, unanswered.</param>
+public sealed record OwnershipTransfer(Compartment Compartment, string From, string To, IReadOnlyCollection<string> Kept, Stamp Proposed, DateTimeOffset ExpiresAt);
+
+/// <summary>The roles the registry reserves for itself.</summary>
+public static class RegistryRoles
+{
+    /// <summary>
+    /// The role of the owner of a compartment, <c>owner</c>: an administration role whose assignable list covers every
+    /// compartment role and which requires a second factor, whatever its declaration says. The registry creates it; the
+    /// application may declare it to give it its operations. It is seated and transferred with the ownership, never
+    /// assigned nor unassigned.
+    /// </summary>
+    public const string Owner = "owner";
+
+    /// <summary>How long a transfer of ownership waits for its recipient: seven days.</summary>
+    public static readonly TimeSpan TransferLifetime = TimeSpan.FromDays(7);
+
+    /// <summary>What the role of the owner always is, whatever else a declaration gives it.</summary>
+    internal static RoleDefinition OwnerDefinition(RoleDefinition? declared) => new(
+        RoleCategory.Administration,
+        declared?.DisplayName ?? "Owner",
+        declared?.Operations ?? [],
+        AssignableRoles.Every(CompartmentRoleSelector.All),
+        RequiresSecondFactor: true);
+}
 
 /// <summary>The state of a user in the registry.</summary>
 public enum UserStatus

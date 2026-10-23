@@ -10,17 +10,37 @@ namespace Stellaegis.Registry.AspNetCore;
 /// <param name="CreatedBy">Who created it.</param>
 /// <param name="ModifiedAt">When it was last changed.</param>
 /// <param name="ModifiedBy">Who last changed it.</param>
-public sealed record CompartmentSummary(string Compartment, string DisplayName, string Status, DateTimeOffset CreatedAt, string CreatedBy, DateTimeOffset ModifiedAt, string ModifiedBy)
+/// <param name="Owner">The subject of its owner, or <see langword="null"/> while none was seated.</param>
+public sealed record CompartmentSummary(string Compartment, string DisplayName, string Status, DateTimeOffset CreatedAt, string CreatedBy, DateTimeOffset ModifiedAt, string ModifiedBy, string? Owner)
 {
     internal static CompartmentSummary Of(CompartmentRecord record)
         => new(record.Compartment.Value, record.DisplayName, Statuses.Of(record.Status),
-            record.Audit.Created.At, record.Audit.Created.By.Value, record.Audit.Modified.At, record.Audit.Modified.By.Value);
+            record.Audit.Created.At, record.Audit.Created.By.Value, record.Audit.Modified.At, record.Audit.Modified.By.Value, record.Owner);
 }
 
 /// <summary>The body of the creation of a compartment.</summary>
 /// <param name="Compartment">Its name, in the grammar of a compartment.</param>
 /// <param name="DisplayName">What people call it.</param>
-public sealed record CreateCompartmentRequest(string Compartment, string DisplayName);
+/// <param name="Owner">The subject of its first owner, seated with it; none when absent, for a later designation.</param>
+public sealed record CreateCompartmentRequest(string Compartment, string DisplayName, string? Owner = null);
+
+/// <summary>A transfer of ownership waiting for its recipient, as the routes answer it.</summary>
+/// <param name="Compartment">The compartment.</param>
+/// <param name="From">The owner who proposed it.</param>
+/// <param name="To">The member who would become the owner.</param>
+/// <param name="Kept">The roles the outgoing owner keeps.</param>
+/// <param name="ProposedAt">When it was proposed.</param>
+/// <param name="ExpiresAt">When it lapses, unanswered.</param>
+public sealed record TransferSummary(string Compartment, string From, string To, string[] Kept, DateTimeOffset ProposedAt, DateTimeOffset ExpiresAt)
+{
+    internal static TransferSummary Of(OwnershipTransfer transfer)
+        => new(transfer.Compartment.Value, transfer.From, transfer.To, transfer.Kept.ToArray(), transfer.Proposed.At, transfer.ExpiresAt);
+}
+
+/// <summary>The body of a proposal of transfer.</summary>
+/// <param name="To">The subject of the member who would become the owner.</param>
+/// <param name="Keep">The roles the outgoing owner keeps; every role they hold when absent.</param>
+public sealed record ProposeTransferRequest(string To, string[]? Keep = null);
 
 /// <summary>The body of the renaming of a compartment.</summary>
 /// <param name="DisplayName">What people call it from now on.</param>

@@ -60,11 +60,17 @@ public static class RegistryOperations
     /// <summary>Assigning or unassigning a platform role, <c>operators.write</c>.</summary>
     public static readonly Operation OperatorsWrite = new("operators", "write", OperationKind.Write);
 
+    /// <summary>
+    /// Proposing, accepting, declining or cancelling a transfer of the ownership of a compartment, <c>ownership.write</c>.
+    /// It opens the routes; the registry checks the author is the owner, or the recipient.
+    /// </summary>
+    public static readonly Operation OwnershipWrite = new("ownership", "write", OperationKind.Write);
+
     /// <summary>Every operation of the module.</summary>
     public static IReadOnlyList<Operation> All { get; } =
     [
         CompartmentsRead, CompartmentsWrite, DirectoryRead, DirectoryWrite, CatalogRead,
-        RolesRead, RolesWrite, MembershipsRead, MembershipsWrite, OperatorsRead, OperatorsWrite,
+        RolesRead, RolesWrite, MembershipsRead, MembershipsWrite, OperatorsRead, OperatorsWrite, OwnershipWrite,
     ];
 }
 
