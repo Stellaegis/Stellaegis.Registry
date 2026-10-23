@@ -123,8 +123,8 @@ internal sealed class PostgreSqlRegistryStore
     async Task IRoleStore.SaveAsync(Role role, CancellationToken cancellationToken)
     {
         Guard.NotNull(role);
-        // The role and its operations in one transaction: a projector recomputing the holders of a role never
-        // reads it with half its operations, and a save the schema refuses leaves the previous ones in place.
+        // The role, its operations and its assignable roles in one transaction: a projector recomputing the holders
+        // of a role never reads it half written, and a save the schema refuses leaves the previous ones in place.
         await using var uow = await _units.OpenAndBeginAsync(cancellationToken).ConfigureAwait(false);
         var roles = uow.Repo<RoleRepository>();
         await roles.UpsertAsync(role, cancellationToken).ConfigureAwait(false);
@@ -132,6 +132,10 @@ internal sealed class PostgreSqlRegistryStore
         var operations = role.Operations.Distinct(StringComparer.Ordinal).ToArray();
         if (operations.Length > 0)
             await roles.InsertOperationsAsync(role.Name, operations, cancellationToken).ConfigureAwait(false);
+        await roles.DeleteAssignableAsync(role.Name, cancellationToken).ConfigureAwait(false);
+        var assignable = role.Assignable.Roles.Distinct(StringComparer.Ordinal).ToArray();
+        if (assignable.Length > 0)
+            await roles.InsertAssignableAsync(role.Name, assignable, cancellationToken).ConfigureAwait(false);
         await uow.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 

@@ -122,13 +122,21 @@ create index ix_operations_module on reg.operations (module);
 -- A role is a name and a set of operations of the catalogue, in one scope: compartment — held by a
 -- member, applicable in every compartment — or platform — held by an operator, in the shared space.
 -- A declared role is one the application declares in code: the installation re-applies it, and it is
--- not deleted.
+-- not deleted. Its category says what it is for, administration or business, never deduced from its
+-- operations. It lets its holder assign the roles of its assignable list: compartment roles as a whole —
+-- none, the business ones, all —, every platform role, and the roles named in role_assignable_roles. A
+-- compartment role never lets its holder assign a platform role; a platform role always requires a
+-- second factor.
 
 create table reg.roles (
-  role          varchar(63)  not null,
-  scope         varchar(11)  not null,
-  display_name  text         not null,
-  declared      boolean      not null,
+  role                    varchar(63)  not null,
+  scope                   varchar(11)  not null,
+  category                varchar(14)  not null,
+  display_name            text         not null,
+  declared                boolean      not null,
+  assigns_compartment     varchar(8)   not null,
+  assigns_platform        boolean      not null,
+  requires_second_factor  boolean      not null,
   created_at    timestamptz  not null,
   created_by    varchar(128) not null,
   modified_at   timestamptz  not null,
@@ -137,6 +145,10 @@ create table reg.roles (
   constraint pk_roles primary key (role),
   constraint ck_roles_role check (role ~ '^[a-z]([a-z0-9_]{0,61}[a-z0-9])?$' and role !~ '__'),
   constraint ck_roles_scope check (scope in ('compartment', 'platform')),
+  constraint ck_roles_category check (category in ('administration', 'business')),
+  constraint ck_roles_assigns_compartment check (assigns_compartment in ('none', 'business', 'all')),
+  constraint ck_roles_assigns_platform check (scope = 'platform' or assigns_platform = false),
+  constraint ck_roles_requires_second_factor check (scope = 'compartment' or requires_second_factor = true),
   constraint ck_roles_display_name check (char_length(display_name) between 1 and 200),
   constraint ck_roles_created_by check (created_by ~ '^[^[:space:][:cntrl:]]([^[:cntrl:]]{0,126}[^[:space:][:cntrl:]])?$'),
   constraint ck_roles_modified_by check (modified_by ~ '^[^[:space:][:cntrl:]]([^[:cntrl:]]{0,126}[^[:space:][:cntrl:]])?$')
@@ -145,6 +157,10 @@ create table reg.roles (
 comment on table  reg.roles           is 'The roles: a name and a set of operations, in one scope. One row per role.';
 comment on column reg.roles.scope     is 'compartment: held by a member in a compartment; platform: held by an operator of the platform.';
 comment on column reg.roles.declared  is 'Whether the application declares the role in code: re-applied by the installation, never deleted.';
+comment on column reg.roles.category  is 'What the role is for: administration (who holds what) or business (what the modules do).';
+comment on column reg.roles.assigns_compartment is 'The compartment roles its holder may assign as a whole, those created later included: none, business, all.';
+comment on column reg.roles.assigns_platform    is 'Whether its holder may assign every platform role; a platform role only.';
+comment on column reg.roles.requires_second_factor is 'Whether its operations are granted only to a session that used a second factor; always for a platform role.';
 comment on column reg.roles.created_by  is 'The actor who created the role: the installation for a declared role, an operator otherwise.';
 comment on column reg.roles.modified_by is 'The actor of the last change; the creator, until a change.';
 
@@ -160,6 +176,19 @@ create table reg.role_operations (
 comment on table reg.role_operations is 'The operations of each role, each in the catalogue. One row per (role, operation).';
 
 create index ix_role_operations_operation on reg.role_operations (operation);
+
+create table reg.role_assignable_roles (
+  role             varchar(63)  not null,
+  assignable_role  varchar(63)  not null,
+
+  constraint pk_role_assignable_roles primary key (role, assignable_role),
+  constraint fk_role_assignable_roles_role foreign key (role) references reg.roles (role) on delete cascade,
+  constraint fk_role_assignable_roles_assignable foreign key (assignable_role) references reg.roles (role)
+);
+
+comment on table reg.role_assignable_roles is 'The roles each role lets its holder assign by name, besides its selectors. One row per (role, assignable role); a role named here is not deleted.';
+
+create index ix_role_assignable_roles_assignable on reg.role_assignable_roles (assignable_role);
 
 -- ── Memberships, and the compartment roles of the members ────────────────────
 -- The first parallel model: the persons in the compartments. A membership admits a person in a

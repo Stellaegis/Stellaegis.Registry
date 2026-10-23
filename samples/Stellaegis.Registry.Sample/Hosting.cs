@@ -61,11 +61,14 @@ public static class SampleRoles
 
     public static IReadOnlyList<RoleDeclaration> Declarations(IEnumerable<ModuleDeclaration> modules) =>
     [
-        new(TenantAdministrator, RoleScope.Compartment, "Administrateur du compartiment", [InventoryOperations.Read, InventoryOperations.Write]),
-        new(ShopManager, RoleScope.Compartment, "Chef d'atelier", [InventoryOperations.Read, InventoryOperations.Write]),
-        new(Operator, RoleScope.Compartment, "Opérateur", [InventoryOperations.Read]),
-        new(SuperAdmin, RoleScope.Platform, "Administrateur de la plateforme",
-            modules.SelectMany(module => module.Operations).DistinctBy(operation => operation.Identity, StringComparer.Ordinal).ToList()),
+        new(TenantAdministrator, RoleScope.Compartment, RoleCategory.Administration, "Administrateur du compartiment",
+            [InventoryOperations.Read, InventoryOperations.Write], AssignableRoles.Every(CompartmentRoleSelector.Business)),
+        new(ShopManager, RoleScope.Compartment, RoleCategory.Business, "Chef d'atelier",
+            [InventoryOperations.Read, InventoryOperations.Write], AssignableRoles.Of(Operator)),
+        new(Operator, RoleScope.Compartment, RoleCategory.Business, "Opérateur", [InventoryOperations.Read]),
+        new(SuperAdmin, RoleScope.Platform, RoleCategory.Administration, "Administrateur de la plateforme",
+            modules.SelectMany(module => module.Operations).DistinctBy(operation => operation.Identity, StringComparer.Ordinal).ToList(),
+            AssignableRoles.Every(CompartmentRoleSelector.All, allPlatform: true)),
     ];
 }
 

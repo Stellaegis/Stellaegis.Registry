@@ -19,25 +19,28 @@ public interface ICatalog
 }
 
 /// <summary>
-/// The roles: a name and a set of operations of the catalogue, in one scope. Every write names the actor who
-/// makes it, which the row keeps and the event carries.
+/// The roles: a name, a category and a set of operations of the catalogue, in one scope, with the roles each lets its
+/// holder assign and whether it requires a second factor. Every write names the actor who makes it, which the row
+/// keeps and the event carries. Nobody changes the definition of a role they hold
+/// (<see cref="RegistryErrors.RoleHeldByAuthor"/>); a platform role always requires a second factor.
 /// </summary>
 public interface IRoles
 {
     /// <summary>
-    /// Records the roles the application declares: creates each when missing, resets its display name and operations
-    /// when present and declared. A role of the same name created by hand is refused (<see cref="RegistryErrors.RoleNotDeclared"/>).
-    /// Every holder of a changed role has their rights recomputed.
+    /// Records the roles the application declares: creates each when missing, resets its definition when present and
+    /// declared. A role of the same name created by hand is refused (<see cref="RegistryErrors.RoleNotDeclared"/>).
+    /// The declarations may name one another in their assignable lists, in any order. Every holder of a changed role
+    /// has their rights recomputed.
     /// </summary>
     Task<Result> DeclareAsync(IEnumerable<RoleDeclaration> declarations, Actor actor, CancellationToken cancellationToken = default);
 
     /// <summary>Creates a role by hand.</summary>
-    Task<Result<Role>> CreateAsync(string name, RoleScope scope, string displayName, IReadOnlyCollection<string> operations, Actor actor, CancellationToken cancellationToken = default);
+    Task<Result<Role>> CreateAsync(string name, RoleScope scope, RoleDefinition definition, Actor actor, CancellationToken cancellationToken = default);
 
-    /// <summary>Changes the display name and the operations of a role; every holder has their rights recomputed. The installation resets a declared role.</summary>
-    Task<Result<Role>> UpdateAsync(string name, string displayName, IReadOnlyCollection<string> operations, Actor actor, CancellationToken cancellationToken = default);
+    /// <summary>Changes the definition of a role; every holder has their rights recomputed. The installation resets a declared role.</summary>
+    Task<Result<Role>> UpdateAsync(string name, RoleDefinition definition, Actor actor, CancellationToken cancellationToken = default);
 
-    /// <summary>Deletes a role created by hand that nobody holds.</summary>
+    /// <summary>Deletes a role created by hand that nobody holds and no assignable list names.</summary>
     Task<Result> DeleteAsync(string name, Actor actor, CancellationToken cancellationToken = default);
 
     /// <summary>The role, or a failure.</summary>
@@ -162,72 +165,88 @@ internal sealed class Roles(
     {
         Guard.NotNull(declarations);
         Guard.NotNull(actor);
-        foreach (var declaration in declarations)
+        var batch = declarations.ToList();
+        if (batch.GroupBy(declaration => declaration.Name, StringComparer.Ordinal).FirstOrDefault(group => group.Count() > 1) is { } twice)
+            throw new ArgumentException($"Role '{twice.Key}' is declared twice.", nameof(declarations));
+        var declaring = batch.ToDictionary(declaration => declaration.Name, declaration => declaration.Scope, StringComparer.Ordinal);
+
+        // Two passes: a declaration may name in its assignable list a role declared after it, which the store
+        // refuses until that role exists. The first pass writes each role with the names that exist already; the
+        // second, the full lists.
+        var written = new List<(Role Role, Role? Before)>();
+        foreach (var declaration in batch)
         {
             if (!RegistryRules.IsRoleName(declaration.Name))
                 return Result.Failure(RegistryErrors.RoleNameInvalid(declaration.Name));
-            var operations = declaration.OperationIdentities;
-            var unknown = await UnknownAsync(operations, cancellationToken).ConfigureAwait(false);
-            if (unknown is not null)
-                return Result.Failure(RegistryErrors.UnknownOperation(unknown));
+            var definition = Normalize(declaration.Scope, declaration.Definition);
+            var invalid = await ValidateAsync(declaration.Name, declaration.Scope, definition, declaring, cancellationToken).ConfigureAwait(false);
+            if (invalid is not null)
+                return Result.Failure(invalid);
 
             var existing = await store.GetAsync(declaration.Name, cancellationToken).ConfigureAwait(false);
             if (existing is { Declared: false })
                 return Result.Failure(RegistryErrors.RoleNotDeclared(declaration.Name));
-            if (existing is not null
-                && existing.Scope == declaration.Scope
-                && existing.DisplayName == declaration.DisplayName
-                && existing.Operations.ToHashSet(StringComparer.Ordinal).SetEquals(operations))
+            if (existing is not null && existing.Scope == declaration.Scope && Same(existing, definition))
                 continue;
+            if (existing is not null && await HeldByAsync(existing, actor, cancellationToken).ConfigureAwait(false))
+                return Result.Failure(RegistryErrors.RoleHeldByAuthor(declaration.Name));
 
             var now = time.GetUtcNow();
-            var role = new Role(declaration.Name, declaration.Scope, declaration.DisplayName, Declared: true, operations,
+            var role = Build(declaration.Name, declaration.Scope, definition, declared: true,
                 existing is null ? Audit.CreatedBy(actor, now) : existing.Audit.ModifiedBy(actor, now));
-            await store.SaveAsync(role, cancellationToken).ConfigureAwait(false);
-            await publisher.PublishAsync(new RoleChangedEvent { OccurredAt = now, Role = role.Name, Exists = true, By = actor }, cancellationToken).ConfigureAwait(false);
-            if (existing is not null)
+            var known = (await store.ListAsync(cancellationToken: cancellationToken).ConfigureAwait(false)).Select(r => r.Name).ToHashSet(StringComparer.Ordinal);
+            known.Add(role.Name);
+            await store.SaveAsync(role with { Assignable = role.Assignable with { Roles = role.Assignable.Roles.Where(known.Contains).ToList() } }, cancellationToken).ConfigureAwait(false);
+            written.Add((role, existing));
+        }
+
+        foreach (var (role, before) in written)
+        {
+            if (role.Assignable.Roles.Count > 0)
+                await store.SaveAsync(role, cancellationToken).ConfigureAwait(false);
+            await publisher.PublishAsync(new RoleChangedEvent { OccurredAt = role.Audit.Modified.At, Role = role.Name, Exists = true, By = actor }, cancellationToken).ConfigureAwait(false);
+            if (before is not null)
                 await projector.ProjectRoleHoldersAsync(role, cancellationToken).ConfigureAwait(false);
         }
         return Result.Success();
     }
 
-    public async Task<Result<Role>> CreateAsync(string name, RoleScope scope, string displayName, IReadOnlyCollection<string> operations, Actor actor, CancellationToken cancellationToken = default)
+    public async Task<Result<Role>> CreateAsync(string name, RoleScope scope, RoleDefinition definition, Actor actor, CancellationToken cancellationToken = default)
     {
-        Guard.NotNull(operations);
+        Guard.NotNull(definition);
         Guard.NotNull(actor);
         if (!RegistryRules.IsRoleName(name))
             return Result.Failure<Role>(RegistryErrors.RoleNameInvalid(name));
         if (await store.GetAsync(name, cancellationToken).ConfigureAwait(false) is not null)
             return Result.Failure<Role>(RegistryErrors.RoleExists(name));
-        var unknown = await UnknownAsync(operations, cancellationToken).ConfigureAwait(false);
-        if (unknown is not null)
-            return Result.Failure<Role>(RegistryErrors.UnknownOperation(unknown));
+        definition = Normalize(scope, definition);
+        var invalid = await ValidateAsync(name, scope, definition, null, cancellationToken).ConfigureAwait(false);
+        if (invalid is not null)
+            return Result.Failure<Role>(invalid);
 
         var now = time.GetUtcNow();
-        var role = new Role(name, scope, Guard.NotWhiteSpace(displayName), Declared: false, operations.Distinct(StringComparer.Ordinal).ToList(), Audit.CreatedBy(actor, now));
+        var role = Build(name, scope, definition, declared: false, Audit.CreatedBy(actor, now));
         await store.SaveAsync(role, cancellationToken).ConfigureAwait(false);
         await publisher.PublishAsync(new RoleChangedEvent { OccurredAt = now, Role = name, Exists = true, By = actor }, cancellationToken).ConfigureAwait(false);
         return Result.Success(role);
     }
 
-    public async Task<Result<Role>> UpdateAsync(string name, string displayName, IReadOnlyCollection<string> operations, Actor actor, CancellationToken cancellationToken = default)
+    public async Task<Result<Role>> UpdateAsync(string name, RoleDefinition definition, Actor actor, CancellationToken cancellationToken = default)
     {
-        Guard.NotNull(operations);
+        Guard.NotNull(definition);
         Guard.NotNull(actor);
         var existing = await store.GetAsync(name, cancellationToken).ConfigureAwait(false);
         if (existing is null)
             return Result.Failure<Role>(RegistryErrors.RoleNotFound(name));
-        var unknown = await UnknownAsync(operations, cancellationToken).ConfigureAwait(false);
-        if (unknown is not null)
-            return Result.Failure<Role>(RegistryErrors.UnknownOperation(unknown));
+        if (await HeldByAsync(existing, actor, cancellationToken).ConfigureAwait(false))
+            return Result.Failure<Role>(RegistryErrors.RoleHeldByAuthor(name));
+        definition = Normalize(existing.Scope, definition);
+        var invalid = await ValidateAsync(name, existing.Scope, definition, null, cancellationToken).ConfigureAwait(false);
+        if (invalid is not null)
+            return Result.Failure<Role>(invalid);
 
         var now = time.GetUtcNow();
-        var role = existing with
-        {
-            DisplayName = Guard.NotWhiteSpace(displayName),
-            Operations = operations.Distinct(StringComparer.Ordinal).ToList(),
-            Audit = existing.Audit.ModifiedBy(actor, now),
-        };
+        var role = Build(name, existing.Scope, definition, existing.Declared, existing.Audit.ModifiedBy(actor, now));
         await store.SaveAsync(role, cancellationToken).ConfigureAwait(false);
         await publisher.PublishAsync(new RoleChangedEvent { OccurredAt = now, Role = name, Exists = true, By = actor }, cancellationToken).ConfigureAwait(false);
         await projector.ProjectRoleHoldersAsync(role, cancellationToken).ConfigureAwait(false);
@@ -247,6 +266,10 @@ internal sealed class Roles(
             : (await operators.ListByRoleAsync(name, cancellationToken).ConfigureAwait(false)).Count > 0;
         if (held)
             return Result.Failure(RegistryErrors.RoleInUse(name));
+        var naming = (await store.ListAsync(cancellationToken: cancellationToken).ConfigureAwait(false))
+            .FirstOrDefault(role => role.Name != name && role.Assignable.Roles.Contains(name, StringComparer.Ordinal));
+        if (naming is not null)
+            return Result.Failure(RegistryErrors.RoleNamedAssignable(name, naming.Name));
 
         await store.DeleteAsync(name, cancellationToken).ConfigureAwait(false);
         await publisher.PublishAsync(new RoleChangedEvent { OccurredAt = time.GetUtcNow(), Role = name, Exists = false, By = actor }, cancellationToken).ConfigureAwait(false);
@@ -266,6 +289,67 @@ internal sealed class Roles(
             return null;
         var known = (await catalog.ListAsync(cancellationToken).ConfigureAwait(false)).Select(entry => entry.Operation).ToHashSet(StringComparer.Ordinal);
         return operations.FirstOrDefault(operation => !known.Contains(operation));
+    }
+
+    // A platform role always requires a second factor (Fred, 2026-10-23): whoever holds the platform holds every
+    // compartment; the flag is set rather than refused, so that a declaration need not repeat it.
+    private static RoleDefinition Normalize(RoleScope scope, RoleDefinition definition) => definition with
+    {
+        DisplayName = Guard.NotWhiteSpace(definition.DisplayName),
+        Operations = Guard.NotNull(definition.Operations).Distinct(StringComparer.Ordinal).ToList(),
+        Assignable = definition.Assignable is { } assignable
+            ? assignable with { Roles = Guard.NotNull(assignable.Roles).Distinct(StringComparer.Ordinal).ToList() }
+            : AssignableRoles.None,
+        RequiresSecondFactor = definition.RequiresSecondFactor || scope == RoleScope.Platform,
+    };
+
+    private static Role Build(string name, RoleScope scope, RoleDefinition definition, bool declared, Audit audit)
+        => new(name, scope, definition.Category, definition.DisplayName, declared, definition.Operations, definition.Assignable!, definition.RequiresSecondFactor, audit);
+
+    private static bool Same(Role role, RoleDefinition definition)
+        => role.Category == definition.Category
+           && role.DisplayName == definition.DisplayName
+           && role.RequiresSecondFactor == definition.RequiresSecondFactor
+           && role.Operations.ToHashSet(StringComparer.Ordinal).SetEquals(definition.Operations)
+           && role.Assignable.SameAs(definition.Assignable!);
+
+    // The operations exist; a compartment role lets its holder assign compartment roles only, by selector or by
+    // name; every role named exists — in the store, or among the roles declared in the same batch.
+    private async Task<Error?> ValidateAsync(string name, RoleScope scope, RoleDefinition definition, IReadOnlyDictionary<string, RoleScope>? declaring, CancellationToken cancellationToken)
+    {
+        var unknown = await UnknownAsync(definition.Operations, cancellationToken).ConfigureAwait(false);
+        if (unknown is not null)
+            return RegistryErrors.UnknownOperation(unknown);
+        var assignable = definition.Assignable!;
+        if (scope == RoleScope.Compartment && assignable.AllPlatform)
+            return RegistryErrors.RoleAssignsPlatform(name);
+        foreach (var named in assignable.Roles)
+        {
+            RoleScope namedScope;
+            if (named == name)
+                namedScope = scope;
+            else if (declaring is not null && declaring.TryGetValue(named, out var declared))
+                namedScope = declared;
+            else if (await store.GetAsync(named, cancellationToken).ConfigureAwait(false) is { } existing)
+                namedScope = existing.Scope;
+            else
+                return RegistryErrors.RoleNotFound(named);
+            if (scope == RoleScope.Compartment && namedScope == RoleScope.Platform)
+                return RegistryErrors.RoleAssignsPlatform(name);
+        }
+        return null;
+    }
+
+    // Whether the actor is a person who holds the role: on the platform for a platform role, in any compartment for a
+    // compartment role. A job — the installation — holds nothing.
+    private async Task<bool> HeldByAsync(Role role, Actor actor, CancellationToken cancellationToken)
+    {
+        if (!RegistryRules.IsSubject(actor.Value))
+            return false;
+        var subject = RegistryRules.NormalizeSubject(actor.Value);
+        return role.Scope == RoleScope.Platform
+            ? (await operators.ListRolesAsync(subject, cancellationToken).ConfigureAwait(false)).Contains(role.Name, StringComparer.Ordinal)
+            : (await memberships.ListByUserAsync(subject, cancellationToken).ConfigureAwait(false)).Any(membership => membership.Roles.Contains(role.Name, StringComparer.Ordinal));
     }
 }
 

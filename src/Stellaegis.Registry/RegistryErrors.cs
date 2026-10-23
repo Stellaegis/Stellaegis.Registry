@@ -44,6 +44,15 @@ public static class RegistryErrors
     /// <summary>The code of <see cref="RoleNameInvalid"/>.</summary>
     public const string RoleNameInvalidCode = "Role.NameInvalid";
 
+    /// <summary>The code of <see cref="RoleAssignsPlatform"/>.</summary>
+    public const string RoleAssignsPlatformCode = "Role.AssignsPlatform";
+
+    /// <summary>The code of <see cref="RoleHeldByAuthor"/>.</summary>
+    public const string RoleHeldByAuthorCode = "Role.HeldByAuthor";
+
+    /// <summary>The code of <see cref="RoleNamedAssignable"/>.</summary>
+    public const string RoleNamedAssignableCode = "Role.NamedAssignable";
+
     /// <summary>The code of <see cref="UnknownOperation"/>.</summary>
     public const string UnknownOperationCode = "Catalog.UnknownOperation";
 
@@ -97,6 +106,18 @@ public static class RegistryErrors
     /// <summary>The name of a role follows the grammar of an identifier.</summary>
     public static Error RoleNameInvalid(string role)
         => Error.Validation(RoleNameInvalidCode, $"'{role}' is not a role name: {NameRules.IdentifierRule}.");
+
+    /// <summary>A compartment role lets its holder assign only compartment roles: a member never makes an operator of the platform.</summary>
+    public static Error RoleAssignsPlatform(string role)
+        => Error.Validation(RoleAssignsPlatformCode, $"Role '{role}' is a compartment role: it cannot let its holder assign a platform role.");
+
+    /// <summary>The author of the change holds the role: nobody changes the definition of a role they hold, which would give them whatever they put in it.</summary>
+    public static Error RoleHeldByAuthor(string role)
+        => Error.Forbidden(RoleHeldByAuthorCode, $"Role '{role}' is held by the author of the change: nobody changes the definition of a role they hold.");
+
+    /// <summary>Another role names this one in its assignable list: remove it from there before deleting it.</summary>
+    public static Error RoleNamedAssignable(string role, string by)
+        => Error.PreconditionFailed(RoleNamedAssignableCode, $"Role '{role}' is named in the assignable list of role '{by}'; remove it from there before deleting it.");
 
     /// <summary>The operation is not in the catalogue: no module declares it.</summary>
     public static Error UnknownOperation(string operation)

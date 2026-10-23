@@ -204,6 +204,26 @@ public static class RegistryAdminEndpoints
             .ProducesProblem(StatusCodes.Status400BadRequest);
     }
 
+    // The definition a body gives a role, or the answer that refuses it.
+    private static bool TryDefine(string? category, string displayName, string[] operations, AssignableRolesBody? assignable, bool requiresSecondFactor, out RoleDefinition definition, out IResult invalid)
+    {
+        definition = null!;
+        invalid = null!;
+        if (!Statuses.TryParse(category, out RoleCategory parsed))
+        {
+            invalid = Invalid("A category is administration or business.");
+            return false;
+        }
+        var roles = AssignableRoles.None;
+        if (assignable is not null && !assignable.TryRead(out roles))
+        {
+            invalid = Invalid("An assignable list has a compartment selector — none, business or all —, a platform flag and an array of role names.");
+            return false;
+        }
+        definition = new RoleDefinition(parsed, displayName, operations, roles, requiresSecondFactor);
+        return true;
+    }
+
     private static void MapRoles(RouteGroupBuilder roles)
     {
         roles.MapGet("/", async (IRoles service, CancellationToken ct, string? scope = null) =>
@@ -232,10 +252,12 @@ public static class RegistryAdminEndpoints
         roles.MapPost("/", async (CreateRoleRequest request, HttpContext http, IRoles service, ILoggerFactory loggers, CancellationToken ct) =>
             {
                 if (request is null || !RegistryRules.IsRoleName(request.Name) || string.IsNullOrWhiteSpace(request.DisplayName) || request.Operations is null)
-                    return Invalid("A role has a name — an identifier —, a scope, a display name and an array of operations.");
+                    return Invalid("A role has a name — an identifier —, a scope, a category, a display name and an array of operations.");
                 if (!Statuses.TryParseScope(request.Scope, out var scope))
                     return Invalid("A scope is compartment or platform.");
-                var created = await service.CreateAsync(request.Name, scope, request.DisplayName, request.Operations, Callers.ActorOf(http), ct);
+                if (!TryDefine(request.Category, request.DisplayName, request.Operations, request.Assignable, request.RequiresSecondFactor, out var definition, out var invalid))
+                    return invalid;
+                var created = await service.CreateAsync(request.Name, scope, definition, Callers.ActorOf(http), ct);
                 Written(http, loggers, "created role {Role}", request.Name);
                 return created.IsSuccess ? Results.Created((string?)null, RoleSummary.Of(created.Value)) : created.ToHttpResult();
             })
@@ -249,9 +271,11 @@ public static class RegistryAdminEndpoints
                 if (!RegistryRules.IsRoleName(role))
                     return NotARole(role);
                 if (request is null || string.IsNullOrWhiteSpace(request.DisplayName) || request.Operations is null)
-                    return Invalid("A role has a display name and an array of operations.");
+                    return Invalid("A role has a category, a display name and an array of operations.");
+                if (!TryDefine(request.Category, request.DisplayName, request.Operations, request.Assignable, request.RequiresSecondFactor, out var definition, out var invalid))
+                    return invalid;
                 Written(http, loggers, "changed role {Role}", role);
-                return Summary(await service.UpdateAsync(role, request.DisplayName, request.Operations, Callers.ActorOf(http), ct), RoleSummary.Of);
+                return Summary(await service.UpdateAsync(role, definition, Callers.ActorOf(http), ct), RoleSummary.Of);
             })
             .WithMetadata(RegistryOperations.RolesWrite)
             .Produces<RoleSummary>(StatusCodes.Status200OK)

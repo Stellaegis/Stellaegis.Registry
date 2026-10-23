@@ -37,6 +37,36 @@ internal static class Names
         _ => throw new InvalidOperationException($"reg.users holds the status '{name}', which this package does not know."),
     };
 
+    public static string Of(RoleCategory category) => category switch
+    {
+        RoleCategory.Administration => "administration",
+        RoleCategory.Business => "business",
+        _ => throw new ArgumentOutOfRangeException(nameof(category), category, "Unknown role category."),
+    };
+
+    public static RoleCategory CategoryOf(string name) => name switch
+    {
+        "administration" => RoleCategory.Administration,
+        "business" => RoleCategory.Business,
+        _ => throw new InvalidOperationException($"reg.roles holds the category '{name}', which this package does not know."),
+    };
+
+    public static string Of(CompartmentRoleSelector selector) => selector switch
+    {
+        CompartmentRoleSelector.None => "none",
+        CompartmentRoleSelector.Business => "business",
+        CompartmentRoleSelector.All => "all",
+        _ => throw new ArgumentOutOfRangeException(nameof(selector), selector, "Unknown compartment role selector."),
+    };
+
+    public static CompartmentRoleSelector SelectorOf(string name) => name switch
+    {
+        "none" => CompartmentRoleSelector.None,
+        "business" => CompartmentRoleSelector.Business,
+        "all" => CompartmentRoleSelector.All,
+        _ => throw new InvalidOperationException($"reg.roles holds the selector '{name}', which this package does not know."),
+    };
+
     public static string Of(OperationKind kind) => kind switch
     {
         OperationKind.Read => "read",
@@ -210,49 +240,66 @@ internal sealed class CatalogRepository(DbConnection connection, Func<DbTransact
 /// <summary>The rows of <c>reg.roles</c> and <c>reg.role_operations</c>.</summary>
 internal sealed class RoleRepository(DbConnection connection, Func<DbTransaction?> transaction)
 {
-    private sealed record Row(string Role, string Scope, string DisplayName, bool Declared, DateTime CreatedAt, string CreatedBy, DateTime ModifiedAt, string ModifiedBy, string? Operation);
+    private sealed record Row(
+        string Role, string Scope, string Category, string DisplayName, bool Declared, string AssignsCompartment, bool AssignsPlatform,
+        bool RequiresSecondFactor, DateTime CreatedAt, string CreatedBy, DateTime ModifiedAt, string ModifiedBy);
 
-    /// <summary>The roles with their operations: one, those of a scope, or all, by name.</summary>
+    private sealed record Pair(string Role, string Value);
+
+    /// <summary>The roles with their operations and their assignable roles: one, those of a scope, or all, by name.</summary>
     public async Task<IReadOnlyList<Role>> ListAsync(string? name, RoleScope? scope, CancellationToken cancellationToken)
     {
+        // Three reads rather than one join: a role's operations and its assignable roles would multiply each other.
+        const string Filter = "(@name::text is null or r.role = @name) and (@scope::text is null or r.scope = @scope)";
+        var parameters = new { name, scope = scope is { } s ? Names.Of(s) : null };
         var rows = await connection.QueryAsync<Row>(new CommandDefinition(
-            """
-            select r.role as Role, r.scope as Scope, r.display_name as DisplayName, r.declared as Declared,
-                   r.created_at as CreatedAt, r.created_by as CreatedBy, r.modified_at as ModifiedAt, r.modified_by as ModifiedBy,
-                   o.operation as Operation
+            $"""
+            select r.role as Role, r.scope as Scope, r.category as Category, r.display_name as DisplayName, r.declared as Declared,
+                   r.assigns_compartment as AssignsCompartment, r.assigns_platform as AssignsPlatform, r.requires_second_factor as RequiresSecondFactor,
+                   r.created_at as CreatedAt, r.created_by as CreatedBy, r.modified_at as ModifiedAt, r.modified_by as ModifiedBy
             from reg.roles r
-            left join reg.role_operations o on o.role = r.role
-            where (@name::text is null or r.role = @name) and (@scope::text is null or r.scope = @scope)
-            order by r.role, o.operation
+            where {Filter}
+            order by r.role
             """,
-            new { name, scope = scope is { } s ? Names.Of(s) : null }, transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false);
+            parameters, transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false);
+        var operations = (await connection.QueryAsync<Pair>(new CommandDefinition(
+            $"select o.role as Role, o.operation as Value from reg.role_operations o join reg.roles r on r.role = o.role where {Filter} order by o.operation",
+            parameters, transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false)).ToLookup(pair => pair.Role, pair => pair.Value, StringComparer.Ordinal);
+        var assignable = (await connection.QueryAsync<Pair>(new CommandDefinition(
+            $"select a.role as Role, a.assignable_role as Value from reg.role_assignable_roles a join reg.roles r on r.role = a.role where {Filter} order by a.assignable_role",
+            parameters, transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false)).ToLookup(pair => pair.Role, pair => pair.Value, StringComparer.Ordinal);
         return rows
-            .GroupBy(row => row.Role, StringComparer.Ordinal)
-            .Select(group =>
-            {
-                var first = group.First();
-                return new Role(first.Role, Names.ScopeOf(first.Scope), first.DisplayName, first.Declared,
-                    group.Where(row => row.Operation is not null).Select(row => row.Operation!).ToList(),
-                    Names.AuditOf(first.CreatedAt, first.CreatedBy, first.ModifiedAt, first.ModifiedBy));
-            })
+            .Select(row => new Role(row.Role, Names.ScopeOf(row.Scope), Names.CategoryOf(row.Category), row.DisplayName, row.Declared,
+                operations[row.Role].ToList(),
+                new AssignableRoles(Names.SelectorOf(row.AssignsCompartment), row.AssignsPlatform, assignable[row.Role].ToList()),
+                row.RequiresSecondFactor,
+                Names.AuditOf(row.CreatedAt, row.CreatedBy, row.ModifiedAt, row.ModifiedBy)))
             .ToList();
     }
 
     public Task UpsertAsync(Role role, CancellationToken cancellationToken)
         => connection.ExecuteAsync(new CommandDefinition(
             """
-            insert into reg.roles (role, scope, display_name, declared, created_at, created_by, modified_at, modified_by)
-            values (@role, @scope, @displayName, @declared, @createdAt, @createdBy, @modifiedAt, @modifiedBy)
+            insert into reg.roles (role, scope, category, display_name, declared, assigns_compartment, assigns_platform, requires_second_factor,
+                                   created_at, created_by, modified_at, modified_by)
+            values (@role, @scope, @category, @displayName, @declared, @assignsCompartment, @assignsPlatform, @requiresSecondFactor,
+                    @createdAt, @createdBy, @modifiedAt, @modifiedBy)
             on conflict (role) do update set
-              scope = excluded.scope, display_name = excluded.display_name, declared = excluded.declared,
+              scope = excluded.scope, category = excluded.category, display_name = excluded.display_name, declared = excluded.declared,
+              assigns_compartment = excluded.assigns_compartment, assigns_platform = excluded.assigns_platform,
+              requires_second_factor = excluded.requires_second_factor,
               modified_at = excluded.modified_at, modified_by = excluded.modified_by
             """,
             new
             {
                 role = role.Name,
                 scope = Names.Of(role.Scope),
+                category = Names.Of(role.Category),
                 displayName = role.DisplayName,
                 declared = role.Declared,
+                assignsCompartment = Names.Of(role.Assignable.Compartment),
+                assignsPlatform = role.Assignable.AllPlatform,
+                requiresSecondFactor = role.RequiresSecondFactor,
                 createdAt = Names.Utc(role.Audit.Created.At),
                 createdBy = role.Audit.Created.By.Value,
                 modifiedAt = Names.Utc(role.Audit.Modified.At),
@@ -272,6 +319,19 @@ internal sealed class RoleRepository(DbConnection connection, Func<DbTransaction
             select @role, unnest(@operations::text[])
             """,
             new { role, operations }, transaction(), cancellationToken: cancellationToken));
+
+    public Task DeleteAssignableAsync(string role, CancellationToken cancellationToken)
+        => connection.ExecuteAsync(new CommandDefinition(
+            "delete from reg.role_assignable_roles where role = @role",
+            new { role }, transaction(), cancellationToken: cancellationToken));
+
+    public Task InsertAssignableAsync(string role, string[] roles, CancellationToken cancellationToken)
+        => connection.ExecuteAsync(new CommandDefinition(
+            """
+            insert into reg.role_assignable_roles (role, assignable_role)
+            select @role, unnest(@roles::text[])
+            """,
+            new { role, roles }, transaction(), cancellationToken: cancellationToken));
 
     /// <summary>Deletes the role; its operations go with it, and a role still held is refused by the schema.</summary>
     public Task DeleteAsync(string role, CancellationToken cancellationToken)

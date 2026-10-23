@@ -58,28 +58,63 @@ public sealed record CatalogEntrySummary(string Module, string Operation, string
 /// <param name="DisplayName">What people call it.</param>
 /// <param name="Declared">Whether the application declares it in code — then it cannot be deleted.</param>
 /// <param name="Operations">The identities of its operations.</param>
+/// <param name="Category">What it is for: <c>administration</c> or <c>business</c>.</param>
+/// <param name="Assignable">The roles it lets its holder assign.</param>
+/// <param name="RequiresSecondFactor">Whether a second factor is required to exercise it; always for a platform role.</param>
 /// <param name="CreatedAt">When it was created.</param>
 /// <param name="CreatedBy">Who created it: the installation, for a declared role.</param>
 /// <param name="ModifiedAt">When it was last changed.</param>
 /// <param name="ModifiedBy">Who last changed it.</param>
-public sealed record RoleSummary(string Name, string Scope, string DisplayName, bool Declared, string[] Operations, DateTimeOffset CreatedAt, string CreatedBy, DateTimeOffset ModifiedAt, string ModifiedBy)
+public sealed record RoleSummary(
+    string Name, string Scope, string DisplayName, bool Declared, string[] Operations, string Category, AssignableRolesBody Assignable,
+    bool RequiresSecondFactor, DateTimeOffset CreatedAt, string CreatedBy, DateTimeOffset ModifiedAt, string ModifiedBy)
 {
     internal static RoleSummary Of(Role role)
         => new(role.Name, Statuses.Of(role.Scope), role.DisplayName, role.Declared, role.Operations.ToArray(),
+            Statuses.Of(role.Category), AssignableRolesBody.Of(role.Assignable), role.RequiresSecondFactor,
             role.Audit.Created.At, role.Audit.Created.By.Value, role.Audit.Modified.At, role.Audit.Modified.By.Value);
+}
+
+/// <summary>The roles a role lets its holder assign, as the routes read and write them.</summary>
+/// <param name="Compartment">The compartment roles covered as a whole, those created later included: <c>none</c>, <c>business</c> or <c>all</c>.</param>
+/// <param name="Platform">Whether every platform role is covered; a platform role only.</param>
+/// <param name="Roles">The roles named one by one.</param>
+public sealed record AssignableRolesBody(string Compartment, bool Platform, string[] Roles)
+{
+    internal static AssignableRolesBody Of(AssignableRoles assignable)
+        => new(Statuses.Of(assignable.Compartment), assignable.AllPlatform, assignable.Roles.ToArray());
+
+    internal bool TryRead(out AssignableRoles assignable)
+    {
+        assignable = AssignableRoles.None;
+        if (!Statuses.TryParse(Compartment, out CompartmentRoleSelector compartment) || Roles is null || Roles.Any(role => !RegistryRules.IsRoleName(role)))
+            return false;
+        assignable = new AssignableRoles(compartment, Platform, Roles.Distinct(StringComparer.Ordinal).ToList());
+        return true;
+    }
 }
 
 /// <summary>The body of the creation of a role.</summary>
 /// <param name="Name">Its name, an identifier.</param>
 /// <param name="Scope">Where it is held: <c>compartment</c> or <c>platform</c>.</param>
+/// <param name="Category">What it is for: <c>administration</c> or <c>business</c>.</param>
 /// <param name="DisplayName">What people call it.</param>
 /// <param name="Operations">The identities of its operations, each in the catalogue.</param>
-public sealed record CreateRoleRequest(string Name, string Scope, string DisplayName, string[] Operations);
+/// <param name="Assignable">The roles it lets its holder assign; none when absent.</param>
+/// <param name="RequiresSecondFactor">Whether a second factor is required to exercise it; forced for a platform role.</param>
+public sealed record CreateRoleRequest(
+    string Name, string Scope, string Category, string DisplayName, string[] Operations,
+    AssignableRolesBody? Assignable = null, bool RequiresSecondFactor = false);
 
-/// <summary>The body of the change of a role: its display name and its operations, replaced.</summary>
+/// <summary>The body of the change of a role: its definition, replaced as a whole.</summary>
+/// <param name="Category">What it is for: <c>administration</c> or <c>business</c>.</param>
 /// <param name="DisplayName">What people call it from now on.</param>
 /// <param name="Operations">The identities of its operations, each in the catalogue.</param>
-public sealed record UpdateRoleRequest(string DisplayName, string[] Operations);
+/// <param name="Assignable">The roles it lets its holder assign; none when absent.</param>
+/// <param name="RequiresSecondFactor">Whether a second factor is required to exercise it; forced for a platform role.</param>
+public sealed record UpdateRoleRequest(
+    string Category, string DisplayName, string[] Operations,
+    AssignableRolesBody? Assignable = null, bool RequiresSecondFactor = false);
 
 /// <summary>A member of a compartment with their roles there, as the administration routes answer them.</summary>
 /// <param name="Subject">The member.</param>
@@ -108,5 +143,17 @@ internal static class Statuses
     public static string Of(RoleScope scope) => scope.ToString().ToLowerInvariant();
 
     public static bool TryParseScope(string? value, out RoleScope scope)
-        => Enum.TryParse(value, ignoreCase: true, out scope) && Enum.IsDefined(scope);
+        => TryParse(value, out scope);
+
+    public static string Of(RoleCategory category) => category.ToString().ToLowerInvariant();
+
+    public static string Of(CompartmentRoleSelector selector) => selector.ToString().ToLowerInvariant();
+
+    // A name only, as the routes write it: never a number, which Enum.TryParse would take.
+    public static bool TryParse<T>(string? value, out T parsed) where T : struct, Enum
+    {
+        parsed = default;
+        return value is not null && value.Length > 0 && char.IsLetter(value[0])
+               && Enum.TryParse(value, ignoreCase: true, out parsed) && Enum.IsDefined(parsed);
+    }
 }

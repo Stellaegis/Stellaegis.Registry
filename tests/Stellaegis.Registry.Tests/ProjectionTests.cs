@@ -87,7 +87,7 @@ public abstract class ProjectionTestsBase
         await host.Memberships.AssignRoleAsync(John, Globex, "accountant", By, Ct);
         host.Sink.Clear();
 
-        Assert.True((await host.Roles.UpdateAsync("reader", "Reader", [ItemsRead.Identity], By, Ct)).IsSuccess);
+        Assert.True((await host.Roles.UpdateAsync("reader", new RoleDefinition(RoleCategory.Business, "Reader", [ItemsRead.Identity]), By, Ct)).IsSuccess);
 
         var calls = host.Sink.Calls.Where(c => c.Kind == RightsSinkCallKind.ReplaceUserGrants).ToList();
         Assert.Equal(2, calls.Count);
@@ -112,7 +112,7 @@ public abstract class ProjectionTestsBase
         await host.Operators.AssignAsync(Jane, "super_admin", By, Ct);
         host.Sink.Clear();
 
-        Assert.True((await host.Roles.UpdateAsync("super_admin", "Platform administrator", [ItemsPurge.Identity], By, Ct)).IsSuccess);
+        Assert.True((await host.Roles.UpdateAsync("super_admin", new RoleDefinition(RoleCategory.Administration, "Platform administrator", [ItemsPurge.Identity], AssignableRoles.Every(CompartmentRoleSelector.All, allPlatform: true)), By, Ct)).IsSuccess);
 
         Assert.Equal(new RightsSinkCall(RightsSinkCallKind.ReplaceAdminGrants, Jane, null, ["items.purge"]), Assert.Single(host.Sink.Calls));
     }

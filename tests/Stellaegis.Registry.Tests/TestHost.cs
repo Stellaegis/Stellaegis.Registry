@@ -106,9 +106,10 @@ internal static class Fixtures
     public static readonly ModuleDeclaration Inventory = ModuleDeclaration.Compartmented<InventoryModule>().WithOperations(ItemsRead, ItemsWrite, ItemsPurge);
     public static readonly ModuleDeclaration Billing = ModuleDeclaration.Compartmented<BillingModule>().WithOperations(InvoicesRead, InvoicesIssue);
 
-    public static readonly RoleDeclaration Reader = new("reader", RoleScope.Compartment, "Reader", [ItemsRead, InvoicesRead]);
-    public static readonly RoleDeclaration Accountant = new("accountant", RoleScope.Compartment, "Accountant", [InvoicesRead, InvoicesIssue]);
-    public static readonly RoleDeclaration SuperAdmin = new("super_admin", RoleScope.Platform, "Platform administrator", [ItemsPurge, RegistryOperations.CompartmentsWrite]);
+    public static readonly RoleDeclaration Reader = new("reader", RoleScope.Compartment, RoleCategory.Business, "Reader", [ItemsRead, InvoicesRead]);
+    public static readonly RoleDeclaration Accountant = new("accountant", RoleScope.Compartment, RoleCategory.Business, "Accountant", [InvoicesRead, InvoicesIssue]);
+    public static readonly RoleDeclaration SuperAdmin = new("super_admin", RoleScope.Platform, RoleCategory.Administration, "Platform administrator", [ItemsPurge, RegistryOperations.CompartmentsWrite],
+        AssignableRoles.Every(CompartmentRoleSelector.All, allPlatform: true));
     public static readonly IReadOnlyList<RoleDeclaration> DeclaredRoles = [Reader, Accountant, SuperAdmin];
 
     /// <summary>The actor of the writes of the tests: the installation of a test, as an installation names itself.</summary>

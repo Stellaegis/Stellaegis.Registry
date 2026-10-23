@@ -64,8 +64,8 @@ public sealed class PostgreSqlStoreTests(PostgreSqlFixture database) : IAsyncLif
     private async Task SeedAsync()
     {
         await Catalog.SaveAsync([new CatalogEntry("inventory", "items.read", OperationKind.Read), new CatalogEntry("inventory", "items.write", OperationKind.Write), new CatalogEntry("billing", "invoices.read", OperationKind.Read)], Ct);
-        await Roles.SaveAsync(new Role("reader", RoleScope.Compartment, "Reader", Declared: true, ["items.read", "invoices.read"], Seeded), Ct);
-        await Roles.SaveAsync(new Role("ops", RoleScope.Platform, "Operations", Declared: false, ["items.write"], Seeded), Ct);
+        await Roles.SaveAsync(new Role("reader", RoleScope.Compartment, RoleCategory.Business, "Reader", Declared: true, ["items.read", "invoices.read"], AssignableRoles.None, false, Seeded), Ct);
+        await Roles.SaveAsync(new Role("ops", RoleScope.Platform, RoleCategory.Administration, "Operations", Declared: false, ["items.write"], AssignableRoles.None, true, Seeded), Ct);
         await Compartments.SaveAsync(new CompartmentRecord(Acme, "Acme SA", CompartmentStatus.Active, Seeded), Ct);
         await Compartments.SaveAsync(new CompartmentRecord(Globex, "Globex", CompartmentStatus.Active, Seeded), Ct);
         await Users.SaveAsync(new UserRecord(Jane, "jane@acme.test", "Jane Admin", UserStatus.Active, Seeded), Ct);
@@ -85,9 +85,14 @@ public sealed class PostgreSqlStoreTests(PostgreSqlFixture database) : IAsyncLif
     [InlineData("insert into reg.operations values ('items-read', 'inventory', 'read')", "23514")]
     [InlineData("insert into reg.operations values ('items.read', 'Inventory', 'read')", "23514")]
     [InlineData("insert into reg.operations values ('items.read', 'inventory', 'purge')", "23514")]
-    [InlineData("insert into reg.roles values ('tenant-administrator', 'compartment', 'x', true, now(), 'job:tests', now(), 'job:tests')", "23514")]
-    [InlineData("insert into reg.roles values ('super__admin', 'platform', 'x', true, now(), 'job:tests', now(), 'job:tests')", "23514")]
-    [InlineData("insert into reg.roles values ('reader', 'tenant', 'x', true, now(), 'job:tests', now(), 'job:tests')", "23514")]
+    [InlineData("insert into reg.roles values ('tenant-administrator', 'compartment', 'administration', 'x', true, 'none', false, false, now(), 'job:tests', now(), 'job:tests')", "23514")]
+    [InlineData("insert into reg.roles values ('super__admin', 'platform', 'administration', 'x', true, 'all', true, true, now(), 'job:tests', now(), 'job:tests')", "23514")]
+    [InlineData("insert into reg.roles values ('reader', 'tenant', 'business', 'x', true, 'none', false, false, now(), 'job:tests', now(), 'job:tests')", "23514")]
+    [InlineData("insert into reg.roles values ('reader', 'compartment', 'boss', 'x', true, 'none', false, false, now(), 'job:tests', now(), 'job:tests')", "23514")]
+    [InlineData("insert into reg.roles values ('reader', 'compartment', 'business', 'x', true, 'some', false, false, now(), 'job:tests', now(), 'job:tests')", "23514")]
+    [InlineData("insert into reg.roles values ('reader', 'compartment', 'business', 'x', true, 'none', true, false, now(), 'job:tests', now(), 'job:tests')", "23514")]
+    [InlineData("insert into reg.roles values ('ops', 'platform', 'administration', 'x', true, 'none', false, false, now(), 'job:tests', now(), 'job:tests')", "23514")]
+    [InlineData("insert into reg.role_assignable_roles values ('nobody', 'nobody')", "23503")]
     [InlineData("insert into reg.role_operations values ('nobody', 'items.read')", "23503")]
     [InlineData("insert into reg.memberships values ('3f2504e04f8941d39a0c0305e82c3301', 'nowhere', now(), 'job:tests')", "23503")]
     [InlineData("insert into reg.operator_roles values ('3f2504e04f8941d39a0c0305e82c3301', 'nobody', now(), 'job:tests')", "23503")]
@@ -158,7 +163,7 @@ public sealed class PostgreSqlStoreTests(PostgreSqlFixture database) : IAsyncLif
         await SeedAsync();
 
         var changed = Seeded.ModifiedBy(Actor.Parse("3f2504e04f8941d39a0c0305e82c3301"), Now.AddHours(1));
-        await Roles.SaveAsync(new Role("reader", RoleScope.Compartment, "Reader of items", Declared: true, ["items.read", "items.read"], changed), Ct);
+        await Roles.SaveAsync(new Role("reader", RoleScope.Compartment, RoleCategory.Business, "Reader of items", Declared: true, ["items.read", "items.read"], AssignableRoles.None, false, changed), Ct);
         var role = (await Roles.GetAsync("reader", Ct))!;
         Assert.Equal("Reader of items", role.DisplayName);
         Assert.Equal(["items.read"], role.Operations);
@@ -210,7 +215,7 @@ public sealed class PostgreSqlStoreTests(PostgreSqlFixture database) : IAsyncLif
     public async Task The_holders_of_a_role_are_read_with_every_role_they_hold()
     {
         await SeedAsync();
-        await Roles.SaveAsync(new Role("accountant", RoleScope.Compartment, "Accountant", Declared: false, ["invoices.read"], Seeded), Ct);
+        await Roles.SaveAsync(new Role("accountant", RoleScope.Compartment, RoleCategory.Business, "Accountant", Declared: false, ["invoices.read"], AssignableRoles.None, false, Seeded), Ct);
         await Memberships.AddAsync(Jane, Acme, Granted, Ct);
         await Memberships.AddAsync(Jane, Globex, Granted, Ct);
         await Memberships.AddAsync(John, Globex, Granted, Ct);
@@ -240,7 +245,7 @@ public sealed class PostgreSqlStoreTests(PostgreSqlFixture database) : IAsyncLif
     public async Task The_operators_are_read_by_role_and_as_a_whole()
     {
         await SeedAsync();
-        await Roles.SaveAsync(new Role("super_admin", RoleScope.Platform, "Platform administrator", Declared: true, ["items.read", "items.write"], Seeded), Ct);
+        await Roles.SaveAsync(new Role("super_admin", RoleScope.Platform, RoleCategory.Administration, "Platform administrator", Declared: true, ["items.read", "items.write"], AssignableRoles.None, true, Seeded), Ct);
         await Operators.AssignAsync(Jane, "super_admin", Granted, Ct);
         await Operators.AssignAsync(Jane, "ops", Granted, Ct);
         await Operators.AssignAsync(John, "ops", Granted, Ct);
@@ -281,5 +286,34 @@ public sealed class PostgreSqlStoreTests(PostgreSqlFixture database) : IAsyncLif
         Assert.Equal(("jane@globex.test", UserStatus.Deactivated), (saved.Email, saved.Status));
         Assert.Equal([Jane, John], (await Users.ListAsync(Ct)).Select(u => u.Subject));
         Assert.Null(await Users.GetAsync(Guid.NewGuid().ToString("N"), Ct));
+    }
+
+    [Fact]
+    public async Task A_role_keeps_its_category_its_assignable_roles_and_its_second_factor_and_a_role_named_there_is_not_deleted()
+    {
+        await SeedAsync();
+        await Roles.SaveAsync(new Role("clerk", RoleScope.Compartment, RoleCategory.Business, "Clerk", Declared: false, ["items.read"], AssignableRoles.None, false, Seeded), Ct);
+        var manager = new Role("manager", RoleScope.Compartment, RoleCategory.Administration, "Manager", Declared: false, ["items.read", "items.write"],
+            new AssignableRoles(CompartmentRoleSelector.Business, false, ["manager", "clerk"]), true, Seeded);
+        await Roles.SaveAsync(manager, Ct);
+
+        var read = (await Roles.GetAsync("manager", Ct))!;
+        Assert.Equal(RoleCategory.Administration, read.Category);
+        Assert.Equal(CompartmentRoleSelector.Business, read.Assignable.Compartment);
+        Assert.False(read.Assignable.AllPlatform);
+        Assert.Equal(["clerk", "manager"], read.Assignable.Roles.Order());
+        Assert.True(read.RequiresSecondFactor);
+        Assert.Equal(["items.read", "items.write"], read.Operations.Order());   // the operations and the list do not multiply each other
+        var ops = Assert.Single(await Roles.ListAsync(RoleScope.Platform, Ct), role => role.Name == "ops");
+        Assert.True(ops.RequiresSecondFactor);
+
+        // A role named in a list is not deleted; the list goes with its role.
+        var refused = await Assert.ThrowsAsync<PostgresException>(() => Roles.DeleteAsync("clerk", Ct));
+        Assert.Equal("23503", refused.SqlState);
+        await Roles.SaveAsync(manager with { Assignable = AssignableRoles.Every(CompartmentRoleSelector.All) }, Ct);
+        Assert.Empty((await Roles.GetAsync("manager", Ct))!.Assignable.Roles);
+        await Roles.DeleteAsync("clerk", Ct);
+        await Roles.DeleteAsync("manager", Ct);
+        Assert.Null(await Roles.GetAsync("clerk", Ct));
     }
 }
