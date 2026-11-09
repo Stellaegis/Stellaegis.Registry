@@ -31,7 +31,7 @@ In order, every write under the actor `job:install`:
 2. the four schemas — `ident`, `oidc`, `authz`, `reg` — installed by the life cycle of Primitives under the
    administration connection: one database, four schemas, one role (the example shares the instance; a deployment
    splits them by configuration alone);
-3. **the catalogue**: every operation every module declares — 32 operations from 5 modules: the inventory, the
+3. **the catalogue**: every operation every module declares — 45 operations from 5 modules: the inventory, the
    accounts, the issuer, Access, the registry — recorded from `GetStellaegisModules()`, nothing seeded by hand; and
    **the roles the application declares** in code (`SampleRoles`): the operations of `owner`, the role the registry
    reserves for the owner of a compartment; `tenant_administrator`, `shop_manager`, `operator` in the compartments;

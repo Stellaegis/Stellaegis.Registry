@@ -36,6 +36,14 @@ public abstract class UpgradeTests
     /// <summary>Opens a connection to the database of the test under the installer.</summary>
     protected abstract Task<DbConnection> OpenAsync(string server, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Opens a connection to the database of the test as the application verifies it at startup. The installer by
+    /// default; an engine whose verification refuses the installer — PostgreSQL refuses a superuser — connects under
+    /// the role the installation grants.
+    /// </summary>
+    protected virtual Task<DbConnection> OpenApplicationAsync(string server, CancellationToken cancellationToken)
+        => OpenAsync(server, cancellationToken);
+
     /// <summary>The role of the application the installation grants.</summary>
     protected const string AppRole = "stellaegis_registry_app";
 
@@ -49,6 +57,7 @@ public abstract class UpgradeTests
         Assert.SkipWhen(string.IsNullOrWhiteSpace(server), $"{Variable} is not set.");
         var ct = TestContext.Current.CancellationToken;
         Task<DbConnection> Open(ModuleDatabase _, CancellationToken token) => OpenAsync(server!, token);
+        Task<DbConnection> OpenApplication(ModuleDatabase _, CancellationToken token) => OpenApplicationAsync(server!, token);
         var (now, later) = Times;
 
         await CreateDatabaseAsync(server!);
@@ -60,11 +69,12 @@ public abstract class UpgradeTests
             await ExecuteAsync(server!, "insert into reg.pending_acts (act_id, kind, subject, role, proposed_at, proposed_by, expires_at) "
                 + $"values ('{Guid.NewGuid()}', 'platform_role', '{Fixtures.Jane}', 'super_admin', {now}, 'job:tests', {later})", ct);
 
-            await Assert.ThrowsAsync<InvalidOperationException>(() => DatabaseLifecycle.VerifyAsync([Declaration], Fixtures.Frame, Open, ct));
+            var refused = await Assert.ThrowsAsync<InvalidOperationException>(() => DatabaseLifecycle.VerifyAsync([Declaration], Fixtures.Frame, OpenApplication, ct));
+            Assert.Contains("0002_reg.sql", refused.Message);
 
             var report = await DatabaseLifecycle.InstallAsync([Declaration], Fixtures.Frame, Open, AppRole, Actor.Job("tests"), ct);
             Assert.Equal(["registry: 0002_reg.sql"], report.Applied);
-            await DatabaseLifecycle.VerifyAsync([Declaration], Fixtures.Frame, Open, ct);
+            await DatabaseLifecycle.VerifyAsync([Declaration], Fixtures.Frame, OpenApplication, ct);
 
             // The act waiting is there as it was; a hand delivery is one now.
             Assert.Equal(1, await CountAsync(server!, "select count(*) from reg.pending_acts where consumed_at is null", ct));
@@ -144,6 +154,20 @@ public sealed class PostgreSqlUpgradeTests : UpgradeTests
     protected override async Task<DbConnection> OpenAsync(string server, CancellationToken cancellationToken)
     {
         var connection = new NpgsqlConnection(new NpgsqlConnectionStringBuilder(server) { Database = Database, Pooling = false }.ConnectionString);
+        await connection.OpenAsync(cancellationToken);
+        return connection;
+    }
+
+    /// <inheritdoc/>
+    protected override async Task<DbConnection> OpenApplicationAsync(string server, CancellationToken cancellationToken)
+    {
+        var connection = new NpgsqlConnection(new NpgsqlConnectionStringBuilder(server)
+        {
+            Database = Database,
+            Username = AppRole,
+            Password = AppRole,
+            Pooling = false,
+        }.ConnectionString);
         await connection.OpenAsync(cancellationToken);
         return connection;
     }
