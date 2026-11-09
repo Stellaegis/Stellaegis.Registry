@@ -45,6 +45,7 @@ public sealed class CompositionTests
         builder.Services.AddStellaegisInMemoryIdentityMailer();
         builder.Services.AddStellaegisRegistryIdentity();
         builder.Services.AddSingleton<IInvitationSender>(sender);
+        builder.Services.Configure<RegistryOptions>(options => options.Invitations.HandDelivery = true);
         builder.Services.AddAuthorization(options =>
         {
             foreach (var operation in IdentityOperations.All)
@@ -144,5 +145,33 @@ public sealed class CompositionTests
         var member = (await services.GetRequiredService<IMemberships>().ListByCompartmentAsync(Acme, Ct)).Single(m => m.Subject == nina.ToString("N"));
         Assert.Equal(["reader"], member.Roles);
         Assert.Equal(nina.ToString("N"), (await services.GetRequiredService<IUserDirectory>().GetAsync(nina.ToString("N"), Ct)).Value.Subject);
+    }
+
+    [Fact]
+    public async Task An_invitation_handed_over_admits_the_account_created_once_its_address_is_proven()
+    {
+        var people = await StartAsync();
+        await using var app = people.App;
+        using var scope = app.Services.CreateScope();
+        var services = scope.ServiceProvider;
+        var issued = await services.GetRequiredService<IInvitations>().IssueAsync(Acme, "omar@acme.test", ["reader"], InvitationDelivery.Hand, Actor.Parse(people.John), cancellationToken: Ct);
+        var token = issued.Value.Token!;
+        Assert.Empty(people.Sender.Sent);
+        var invitations = services.GetRequiredService<InvitationService>();
+        Assert.Equal(new InvitationOffer("omar@acme.test", SentByEmail: false), await invitations.FindAsync(token, Ct));
+
+        // The account is created; a link handed over proves nothing, so the acceptance waits — the invitation holds.
+        var omar = (await invitations.CreateAccountAsync(token, "Omar", "Correct-Horse-9", Ct)).Value;
+        Assert.Equal(IdentityErrors.EmailNotVerified, (await invitations.AcceptAsync(token, omar, Ct)).Error);
+        Assert.DoesNotContain((await services.GetRequiredService<IMemberships>().ListByCompartmentAsync(Acme, Ct)), m => m.Subject == omar.ToString("N"));
+        Assert.NotNull(await invitations.FindAsync(token, Ct));
+
+        // The address proven from the account, the same link admits it.
+        var account = services.GetRequiredService<AccountService>();
+        var code = (await account.RequestEmailVerificationAsync(omar, cancellationToken: Ct)).Value;
+        Assert.True((await account.ConfirmEmailVerificationAsync(omar, code, Ct)).IsSuccess);
+        Assert.True((await invitations.AcceptAsync(token, omar, Ct)).IsSuccess);
+        var member = (await services.GetRequiredService<IMemberships>().ListByCompartmentAsync(Acme, Ct)).Single(m => m.Subject == omar.ToString("N"));
+        Assert.Equal(["reader"], member.Roles);
     }
 }
