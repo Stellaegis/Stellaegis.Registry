@@ -26,8 +26,8 @@ The library targets .NET 10 and is released under the MIT license.
 | `Stellaegis.Registry.AspNetCore` | The administration routes, each under its operation, decided in the shared space; the invitation routes; the rule on a person, the authorization of a `Subject` | `Stellaegis.Primitives.AspNetCore`, ASP.NET Core |
 | `Stellaegis.Registry.Identity` | The registry and `Stellaegis.Identity` composed: the ports of the accounts answered by the registry — the second person who approves a reset link handed over, the invitation an account accepts | `Stellaegis.Registry`, `Stellaegis.Identity` |
 
-The packages share one version. They started at the major version of Stellaegis.Primitives, 5; 7.0.0 runs on
-Primitives 5.5.0. `Stellaegis.Registry.Identity` is the one package that depends on another module of the family: a
+The packages share one version. They started at the major version of Stellaegis.Primitives, 5; 7.1.0 runs on
+Primitives 5.6.0. `Stellaegis.Registry.Identity` is the one package that depends on another module of the family: a
 package of composition, the one place the registry and the accounts meet, so that no host copies the bridge.
 
 ## A host, in full
@@ -371,7 +371,8 @@ users and the roles, `granted_by` on the memberships, the member roles and the o
 `validated_by` and `rejected_by` on the acts, `issued_by` and `revoked_by` on the invitations — never defaulted, an
 actor forgotten being an error rather than "system". The services take the `Actor` on every write, the rows keep
 it, the summaries of the routes answer it, the events carry it (`By`). The routes pass the principal the host
-authenticated; the installation names itself, `job:install`; a user recorded from their registration is recorded
+authenticated, its actor read by `Actor.TryParseClaim` — a token naming a job fails the request, since the registry
+lifts its bounds for a job and only the code names one —; the installation names itself, `job:install`; a user recorded from their registration is recorded
 by themselves; a right applied after a validation or an acceptance is granted by whoever proposed or invited.
 
 ## Events

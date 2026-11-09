@@ -5,6 +5,29 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [7.1.0] — 2026-11-09
+
+On `Stellaegis.Primitives` 5.6.0, and a token naming a job is never the installation.
+
+### Fixed
+
+- **A token naming a job is never the installation.** The routes read the actor of a request from its claims with
+  `Actor.TryParse`, which takes `job:…`: a token whose `sub` was `job:install`, let through by the host's policy, was
+  the installation — a platform role assigned at once, without the act a second person validates, and no bound on
+  the roles assigned. The actor is read with `Actor.TryParseClaim`: a token naming a job, or the anonymous actor of
+  the frame, fails the request; the rule on a person refuses it.
+
+### Changed
+
+- **`Stellaegis.Primitives` 5.6.0**, and `Stellaegis.Registry.Identity` on `Stellaegis.Identity` 9.0.1. The example
+  host takes Issuer 5.4.1 and Access 6.1.0.
+
+### Updating from 7.0.0
+
+Take the version. A host meets what the startup of Primitives 5.6.0 now refuses, listed with its way out in the
+CHANGELOG of Primitives, § *Updating from 5.5.0*. A host whose services act as a job call the services in code, as the
+installation does: a token never carries a job.
+
 ## [7.0.0] — 2026-11-09
 
 The gestures on a person, reviewed after a host had to open the administration of the accounts wide to let a manager
