@@ -126,6 +126,19 @@ public abstract class RegistryStoreTests(IRegistryDatabaseFixture database) : IA
         await Users.SaveAsync(new UserRecord(John, "john@acme.test", "John Doe", UserStatus.Active, Seeded), Ct);
     }
 
+    [Fact]
+    public async Task Retiring_operations_takes_them_from_the_roles_then_the_catalogue_and_names_the_roles_touched()
+    {
+        await SeedAsync();
+
+        Assert.Equal(["ops"], await Catalog.RetireAsync(["items.write"], Ct));
+
+        Assert.DoesNotContain(await Catalog.ListAsync(Ct), entry => entry.Operation == "items.write");
+        Assert.Empty((await Roles.GetAsync("ops", Ct))!.Operations);
+        Assert.Equal(["invoices.read", "items.read"], (await Roles.GetAsync("reader", Ct))!.Operations.Order());
+        Assert.Empty(await Catalog.RetireAsync([], Ct));
+    }
+
     // ── What the schema guarantees ───────────────────────────────────────────
 
     [Fact]

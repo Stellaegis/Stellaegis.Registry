@@ -18,7 +18,7 @@ public enum PendingActKind
 /// <summary>Where a validation comes from.</summary>
 public enum ValidationChannel
 {
-    /// <summary>The administration routes: a person other than the author, holding <c>validations.write</c>.</summary>
+    /// <summary>The administration routes: a person other than the author, holding <c>validations.decide</c>.</summary>
     Screen,
 
     /// <summary>
@@ -87,7 +87,7 @@ public interface IPendingActStore
 
 /// <summary>
 /// The validation of the three sensitive acts — the assignment of a platform role, the definition of a role, the rescue
-/// of an ownership —, by a second channel. On screen, a person other than the author, holding <c>validations.write</c>,
+/// of an ownership —, by a second channel. On screen, a person other than the author, holding <c>validations.decide</c>,
 /// whose lists cover the platform role validated, who does not hold the role redefined; never one's own act. At the
 /// console, the <c>validate</c> verb of the host, which may validate any act, the only operator's included. Validating
 /// applies the act, checked again; the act keeps its author and its validator.
@@ -171,7 +171,7 @@ internal sealed class Validations(
         return time.GetUtcNow() >= act.ExpiresAt ? Result.Failure(RegistryErrors.ActExpired()) : Result.Success();
     }
 
-    // On screen: a person other than the author, holding validations.write by a platform role, and, for a platform role,
+    // On screen: a person other than the author, holding validations.decide by a platform role, and, for a platform role,
     // whose lists cover it; for a role redefined, who does not hold it.
     private async Task<Error?> WhyNotValidatorAsync(PendingAct act, Actor actor, CancellationToken cancellationToken)
     {
@@ -184,7 +184,7 @@ internal sealed class Validations(
             return RegistryErrors.NotValidator();
         var all = (await roles.ListAsync(cancellationToken: cancellationToken).ConfigureAwait(false)).ToDictionary(role => role.Name, StringComparer.Ordinal);
         var held = await operators.ListRolesAsync(validator, cancellationToken).ConfigureAwait(false);
-        if (!held.Any(name => all.TryGetValue(name, out var role) && role.Operations.Contains(RegistryOperations.ValidationsWrite.Identity, StringComparer.Ordinal)))
+        if (!held.Any(name => all.TryGetValue(name, out var role) && role.Operations.Contains(RegistryOperations.ValidationsDecide.Identity, StringComparer.Ordinal)))
             return RegistryErrors.NotValidator();
         switch (act.Kind)
         {

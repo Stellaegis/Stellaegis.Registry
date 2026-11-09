@@ -130,8 +130,10 @@ invitation that designates the owner, or `IOwnership.SeatAsync`.
 A declared role is created when missing and reset — display name, category, operations, assignable roles — when
 present: an edit by hand is put back by the next installation, and a declared role is never deleted. A role created
 by hand is never touched by a declaration, and a declaration whose name is taken by one is refused. The catalogue
-adds and updates the kind of an operation, and removes nothing: an operation a module no longer declares stays
-grantable until someone decides otherwise.
+adds and updates the kind of an operation, and retires the operations a module recorded no longer declares — from the
+catalogue and from every role that held them, whose holders are projected again: an operation renamed by its module
+is never left behind, granting nothing and shown on every screen. Only the modules recorded are read: those another
+host recorded in the same catalogue, by its own installation, are left as they are.
 
 ## What the registry holds
 
@@ -162,7 +164,12 @@ collation of the database.
 A subject is the `sub` of an account of Identity, a GUID written as 32 hex digits. A role name is an identifier,
 `super_admin`, `tenant_administrator`. An operation's identity is global in a host: it is the key Access grants,
 whatever module declares it — which is why the registry names its own operations on the directory of users
-`directory.read` and `directory.write`, `users.read` being Identity's.
+`directory.read` and `directory.deactivate`, `users.read` being Identity's.
+
+**An operation names a gesture, never a verb of the wire.** Each says what it does to whom it reaches — `memberships.add`
+and `memberships.grant`, `roles.create` and `roles.define`, `compartments.suspend` and `compartments.terminate` —, so that
+what a role grants reads as what its holder may do: one `write` for creating a compartment and terminating it would
+hide the second behind the first.
 
 ### The effective rights
 
@@ -218,7 +225,7 @@ compartment —, creating a role or changing what it grants (not its display nam
 by a person, they wait seven days in `reg.pending_acts` with no effect anywhere, and the route answers 202 with the
 act. Two channels validate one:
 
-- **the screen**: another person holding `validations.write`, whose lists cover the platform role and who does not
+- **the screen**: another person holding `validations.decide`, whose lists cover the platform role and who does not
   hold the role redefined — never the author;
 - **the console**: the `validate` verb of the host, the same executable in a process apart, under the
   administration connection of the database, the actor the system account that runs it,
@@ -256,28 +263,38 @@ member of a compartment is, in that compartment, in the situation of any member.
 | Routes | Operation |
 | --- | --- |
 | `GET compartments`, `GET compartments/{compartment}`, `GET compartments/{compartment}/owner/transfer` | `compartments.read` |
-| `POST compartments` (201), `PUT compartments/{compartment}` (the display name), `POST compartments/{compartment}/suspend`, `…/resume`, `…/terminate`, `PUT compartments/{compartment}/owner/{subject}` (seats the owner of a compartment that has none) | `compartments.write` |
-| `PUT compartments/{compartment}/owner/transfer`, `POST …/owner/transfer/accept`, `DELETE …/owner/transfer` | `ownership.write` |
+| `POST compartments` (201) | `compartments.create` |
+| `PUT compartments/{compartment}` (the display name) | `compartments.rename` |
+| `POST compartments/{compartment}/suspend`, `…/resume` | `compartments.suspend` |
+| `POST compartments/{compartment}/terminate` | `compartments.terminate` |
+| `PUT compartments/{compartment}/owner/{subject}` (seats the owner of a compartment that has none) | `ownership.designate` |
+| `PUT compartments/{compartment}/owner/transfer`, `POST …/owner/transfer/accept`, `DELETE …/owner/transfer` | `ownership.transfer` |
 | `PUT compartments/{compartment}/owner/rescue/{subject}` (202) | `ownership.rescue` |
 | `GET users`, `GET users/{subject}` — no creation: a user is the projection of an account of Identity | `directory.read` |
-| `POST users/{subject}/deactivate`, `…/reactivate` | `directory.write` |
+| `POST users/{subject}/deactivate`, `…/reactivate` | `directory.deactivate` |
 | `GET catalog`, `GET catalog/{module}` | `catalog.read` |
 | `GET roles?scope=`, `GET roles/{role}` | `roles.read` |
-| `POST roles` (202, the act waiting), `PUT roles/{role}` (200 for the display name alone, 202 otherwise), `DELETE roles/{role}` — a declared role is changed, never deleted | `roles.write` |
+| `POST roles` (202, the act waiting) | `roles.create` |
+| `PUT roles/{role}` (200 for the display name alone, 202 otherwise) | `roles.define` |
+| `DELETE roles/{role}` — a declared role is changed, never deleted | `roles.delete` |
 | `GET memberships/compartments/{compartment}`, `GET memberships/users/{subject}` | `memberships.read` |
-| `PUT memberships/{compartment}/{subject}`, `DELETE …`, `PUT …/roles/{role}`, `DELETE …/roles/{role}` | `memberships.write` |
+| `PUT memberships/{compartment}/{subject}` | `memberships.add` |
+| `DELETE memberships/{compartment}/{subject}` | `memberships.remove` |
+| `PUT memberships/{compartment}/{subject}/roles/{role}` | `memberships.grant` |
+| `DELETE memberships/{compartment}/{subject}/roles/{role}` | `memberships.revoke` |
 | `GET operators`, `GET operators/{subject}`, `GET validations` | `operators.read` |
-| `PUT operators/{subject}/roles/{role}` (202), `DELETE …` | `operators.write` |
-| `POST validations/{id}/validate`, `POST validations/{id}/reject` | `validations.write` |
+| `PUT operators/{subject}/roles/{role}` (202) | `operators.grant` |
+| `DELETE operators/{subject}/roles/{role}` | `operators.revoke` |
+| `POST validations/{id}/validate`, `POST validations/{id}/reject` | `validations.decide` |
 
 `MapRegistryInvitationEndpoints()` maps the invitations apart, and refuses a host that could deliver none — no
 `IInvitationSender`, no `HandDelivery` declared — at startup:
 
 | Routes | Operation |
 | --- | --- |
-| `POST compartments/{compartment}/invitations` (201; the token in the answer when handed over) | `invitations.write` |
+| `POST compartments/{compartment}/invitations` (201; the token in the answer when handed over) | `invitations.send` |
 | `GET compartments/{compartment}/invitations` | `memberships.read` |
-| `DELETE invitations/{id}` — its author, the owner of its compartment, or anyone who could issue it | `invitations.write` |
+| `DELETE invitations/{id}` — its author, the owner of its compartment, or anyone who could issue it | `invitations.cancel` |
 
 A refusal of a service is answered as problem details with its code:
 

@@ -331,6 +331,23 @@ internal sealed class CatalogRepository(DbConnection connection, Func<DbTransact
         => connection.ExecuteAsync(new CommandDefinition(
             "update reg.operations set hardened_second_factor = true where operation = any(@operations)",
             new { operations = operations.ToArray() }, transaction(), cancellationToken: cancellationToken));
+
+    // The roles that hold any of the operations, before they lose them.
+    public async Task<IReadOnlyList<string>> RolesHoldingAsync(IReadOnlyCollection<string> operations, CancellationToken cancellationToken)
+        => (await connection.QueryAsync<string>(new CommandDefinition(
+            "select distinct role from reg.role_operations where operation = any(@operations) order by role",
+            new { operations = operations.ToArray() }, transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false)).ToList();
+
+    // From the roles first: the catalogue is what their rows reference.
+    public async Task RetireAsync(IReadOnlyCollection<string> operations, CancellationToken cancellationToken)
+    {
+        await connection.ExecuteAsync(new CommandDefinition(
+            "delete from reg.role_operations where operation = any(@operations)",
+            new { operations = operations.ToArray() }, transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false);
+        await connection.ExecuteAsync(new CommandDefinition(
+            "delete from reg.operations where operation = any(@operations)",
+            new { operations = operations.ToArray() }, transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false);
+    }
 }
 
 /// <summary>The rows of <c>reg.roles</c> and <c>reg.role_operations</c>.</summary>

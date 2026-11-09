@@ -9,8 +9,11 @@ namespace Stellaegis.Registry;
 public interface ICatalog
 {
     /// <summary>
-    /// Records the operations of the modules: adds the new ones, updates the kind and the module of the known ones,
-    /// removes nothing — an operation a module no longer declares stays grantable until someone decides otherwise.
+    /// Records the operations of the modules: adds the new ones, updates the kind and the module of the known ones, and
+    /// retires those a module given no longer declares — from the catalogue and from every role that held them, whose
+    /// holders are projected again. An operation renamed by its module is thus never left behind, granting nothing and
+    /// shown everywhere. Only the modules given are read: another host's modules, recorded in the same catalogue by
+    /// their own installation, are left as they are.
     /// </summary>
     Task<IReadOnlyList<CatalogEntry>> RecordAsync(IEnumerable<ModuleDeclaration> modules, CancellationToken cancellationToken = default);
 
@@ -168,7 +171,7 @@ public interface IOperators
     Task<IReadOnlyList<(string Subject, IReadOnlyCollection<string> Roles)>> ListAsync(CancellationToken cancellationToken = default);
 }
 
-internal sealed class Catalog(ICatalogStore store) : ICatalog
+internal sealed class Catalog(ICatalogStore store, IRoleStore roles, RightsProjector projector) : ICatalog
 {
     public async Task<IReadOnlyList<CatalogEntry>> RecordAsync(IEnumerable<ModuleDeclaration> modules, CancellationToken cancellationToken = default)
     {
@@ -179,6 +182,22 @@ internal sealed class Catalog(ICatalogStore store) : ICatalog
             .Select(group => group.First())
             .ToList();
         await store.SaveAsync(entries, cancellationToken).ConfigureAwait(false);
+
+        // What the modules installed here declared once and no longer do.
+        var installed = modules.Select(module => module.Name).ToHashSet(StringComparer.Ordinal);
+        var declared = entries.Select(entry => entry.Operation).ToHashSet(StringComparer.Ordinal);
+        var retired = (await store.ListAsync(cancellationToken).ConfigureAwait(false))
+            .Where(entry => installed.Contains(entry.Module) && !declared.Contains(entry.Operation))
+            .Select(entry => entry.Operation)
+            .ToList();
+        if (retired.Count > 0)
+        {
+            foreach (var name in await store.RetireAsync(retired, cancellationToken).ConfigureAwait(false))
+            {
+                if (await roles.GetAsync(name, cancellationToken).ConfigureAwait(false) is { } role)
+                    await projector.ProjectRoleHoldersAsync(role, cancellationToken).ConfigureAwait(false);
+            }
+        }
         return entries;
     }
 

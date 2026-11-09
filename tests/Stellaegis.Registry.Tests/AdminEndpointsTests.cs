@@ -220,7 +220,7 @@ public sealed class AdminEndpointsTests
         var waiting = await client.PutAsync($"/api/admin/registry/operators/{Jane}/roles/super_admin", null, Ct);
         Assert.Empty((await client.GetFromJsonAsync<OperatorSummary>($"/api/admin/registry/operators/{Jane}", Ct))!.Roles);
         await ValidatedAsync(app, waiting);
-        Assert.Equal([RegistryOperations.CompartmentsWrite.Identity, ItemsPurge.Identity], sink.Last(RightsSinkCallKind.ReplaceAdminGrants)!.Values.Order());
+        Assert.Equal([RegistryOperations.CompartmentsCreate.Identity, ItemsPurge.Identity], sink.Last(RightsSinkCallKind.ReplaceAdminGrants)!.Values.Order());
         var operators = await client.GetFromJsonAsync<OperatorSummary[]>("/api/admin/registry/operators", Ct);
         Assert.Equal(["super_admin"], operators!.Single(entry => entry.Subject == Jane).Roles);
         Assert.Equal(["super_admin"], (await client.GetFromJsonAsync<OperatorSummary>($"/api/admin/registry/operators/{Jane}", Ct))!.Roles);
@@ -350,7 +350,7 @@ public sealed class AdminEndpointsTests
         {
             var services = scope.ServiceProvider;
             Assert.True((await services.GetRequiredService<IRoles>().CreateAsync("validator", RoleScope.Platform, new RoleDefinition(RoleCategory.Administration, "Validator",
-                [RegistryOperations.ValidationsWrite.Identity], AssignableRoles.Every(CompartmentRoleSelector.All, allPlatform: true)), By, Ct)).IsSuccess);
+                [RegistryOperations.ValidationsDecide.Identity], AssignableRoles.Every(CompartmentRoleSelector.All, allPlatform: true)), By, Ct)).IsSuccess);
             Assert.True((await services.GetRequiredService<IOperators>().AssignAsync(John, "super_admin", By, Ct)).IsSuccess);
             Assert.True((await services.GetRequiredService<IOperators>().AssignAsync(Jane, "validator", By, Ct)).IsSuccess);
         }

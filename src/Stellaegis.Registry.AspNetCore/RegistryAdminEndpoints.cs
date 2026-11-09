@@ -24,18 +24,19 @@ namespace Stellaegis.Registry.AspNetCore;
 /// </para>
 /// <list type="bullet">
 ///   <item><c>GET registry/compartments</c>, <c>GET registry/compartments/{compartment}</c> — <c>compartments.read</c></item>
-///   <item><c>POST registry/compartments</c> (201, with its first owner or without), <c>PUT registry/compartments/{compartment}</c> (the display name), <c>POST …/suspend</c>, <c>…/resume</c>, <c>…/terminate</c>, <c>PUT …/owner/{subject}</c> (the first owner, once) — <c>compartments.write</c></item>
-///   <item><c>GET registry/compartments/{compartment}/owner/transfer</c> — <c>compartments.read</c>; <c>PUT …/owner/transfer</c>, <c>POST …/owner/transfer/accept</c>, <c>DELETE …/owner/transfer</c> — <c>ownership.write</c>, the registry checking the author is the owner, or the recipient</item>
+///   <item><c>POST registry/compartments</c> (201, with its first owner or without) — <c>compartments.create</c>; <c>PUT registry/compartments/{compartment}</c> (the display name) — <c>compartments.rename</c>; <c>POST …/suspend</c>, <c>…/resume</c> — <c>compartments.suspend</c>; <c>POST …/terminate</c> — <c>compartments.terminate</c></item>
+///   <item><c>PUT registry/compartments/{compartment}/owner/{subject}</c> (the first owner, once) — <c>ownership.designate</c></item>
+///   <item><c>GET registry/compartments/{compartment}/owner/transfer</c> — <c>compartments.read</c>; <c>PUT …/owner/transfer</c>, <c>POST …/owner/transfer/accept</c>, <c>DELETE …/owner/transfer</c> — <c>ownership.transfer</c>, the registry checking the author is the owner, or the recipient</item>
 ///   <item><c>GET registry/users</c>, <c>GET registry/users/{subject}</c> — <c>directory.read</c>; no creation: a user is the projection of an account of Identity, recorded by the host from <c>UserRegistered</c></item>
-///   <item><c>POST registry/users/{subject}/deactivate</c>, <c>…/reactivate</c> — <c>directory.write</c></item>
+///   <item><c>POST registry/users/{subject}/deactivate</c>, <c>…/reactivate</c> — <c>directory.deactivate</c></item>
 ///   <item><c>GET registry/catalog</c>, <c>GET registry/catalog/{module}</c> — <c>catalog.read</c></item>
 ///   <item><c>GET registry/roles?scope=</c>, <c>GET registry/roles/{role}</c> — <c>roles.read</c></item>
-///   <item><c>POST registry/roles</c> (201), <c>PUT registry/roles/{role}</c>, <c>DELETE registry/roles/{role}</c> — <c>roles.write</c>; a declared role is changed, never deleted</item>
+///   <item><c>POST registry/roles</c> (201) — <c>roles.create</c>; <c>PUT registry/roles/{role}</c> — <c>roles.define</c>; <c>DELETE registry/roles/{role}</c> — <c>roles.delete</c>; a declared role is changed, never deleted</item>
 ///   <item><c>GET registry/memberships/compartments/{compartment}</c>, <c>GET registry/memberships/users/{subject}</c> — <c>memberships.read</c></item>
-///   <item><c>PUT registry/memberships/{compartment}/{subject}</c>, <c>DELETE …</c>, <c>PUT …/roles/{role}</c>, <c>DELETE …/roles/{role}</c> — <c>memberships.write</c></item>
+///   <item><c>PUT registry/memberships/{compartment}/{subject}</c> — <c>memberships.add</c>; <c>DELETE …</c> — <c>memberships.remove</c>; <c>PUT …/roles/{role}</c> — <c>memberships.grant</c>; <c>DELETE …/roles/{role}</c> — <c>memberships.revoke</c></item>
 ///   <item><c>GET registry/operators</c>, <c>GET registry/operators/{subject}</c> — <c>operators.read</c></item>
-///   <item><c>PUT registry/operators/{subject}/roles/{role}</c> (202, an act to validate; 204 for the installation), <c>DELETE …</c> — <c>operators.write</c></item>
-///   <item><c>GET registry/validations</c> — <c>operators.read</c>; <c>POST registry/validations/{id}/validate</c>, <c>…/reject</c> — <c>validations.write</c>, never one's own act</item>
+///   <item><c>PUT registry/operators/{subject}/roles/{role}</c> (202, an act to validate; 204 for the installation) — <c>operators.grant</c>; <c>DELETE …</c> — <c>operators.revoke</c></item>
+///   <item><c>GET registry/validations</c> — <c>operators.read</c>; <c>POST registry/validations/{id}/validate</c>, <c>…/reject</c> — <c>validations.decide</c>, never one's own act</item>
 ///   <item><c>PUT registry/compartments/{compartment}/owner/rescue/{subject}</c> (202) — <c>ownership.rescue</c></item>
 /// </list>
 /// <para>
@@ -106,7 +107,7 @@ public static class RegistryAdminEndpoints
                 Written(http, loggers, "validated act {Act}", id);
                 return (await service.ValidateAsync(id, Callers.ActorOf(http), ValidationChannel.Screen, ct)).ToHttpResult();
             })
-            .WithMetadata(RegistryOperations.ValidationsWrite)
+            .WithMetadata(RegistryOperations.ValidationsDecide)
             .Produces(StatusCodes.Status204NoContent)
             .ProducesProblem(StatusCodes.Status403Forbidden)
             .ProducesProblem(StatusCodes.Status404NotFound)
@@ -117,7 +118,7 @@ public static class RegistryAdminEndpoints
                 Written(http, loggers, "rejected act {Act}", id);
                 return (await service.RejectAsync(id, Callers.ActorOf(http), ValidationChannel.Screen, ct)).ToHttpResult();
             })
-            .WithMetadata(RegistryOperations.ValidationsWrite)
+            .WithMetadata(RegistryOperations.ValidationsDecide)
             .Produces(StatusCodes.Status204NoContent)
             .ProducesProblem(StatusCodes.Status403Forbidden)
             .ProducesProblem(StatusCodes.Status404NotFound);
@@ -153,7 +154,7 @@ public static class RegistryAdminEndpoints
                 Written(http, loggers, "created compartment {Compartment}", parsed);
                 return created.IsSuccess ? Results.Created((string?)null, CompartmentSummary.Of(created.Value)) : created.ToHttpResult();
             })
-            .WithMetadata(RegistryOperations.CompartmentsWrite)
+            .WithMetadata(RegistryOperations.CompartmentsCreate)
             .Produces<CompartmentSummary>(StatusCodes.Status201Created)
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status409Conflict);
@@ -167,14 +168,14 @@ public static class RegistryAdminEndpoints
                 Written(http, loggers, "renamed compartment {Compartment}", parsed);
                 return Summary(await service.RenameAsync(parsed, request.DisplayName, Callers.ActorOf(http), ct), CompartmentSummary.Of);
             })
-            .WithMetadata(RegistryOperations.CompartmentsWrite)
+            .WithMetadata(RegistryOperations.CompartmentsRename)
             .Produces<CompartmentSummary>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status404NotFound);
 
-        MapTransition(compartments, "suspend", (service, compartment, actor, ct) => service.SuspendAsync(compartment, actor, ct));
-        MapTransition(compartments, "resume", (service, compartment, actor, ct) => service.ResumeAsync(compartment, actor, ct));
-        MapTransition(compartments, "terminate", (service, compartment, actor, ct) => service.TerminateAsync(compartment, actor, ct));
+        MapTransition(compartments, "suspend", RegistryOperations.CompartmentsSuspend, (service, compartment, actor, ct) => service.SuspendAsync(compartment, actor, ct));
+        MapTransition(compartments, "resume", RegistryOperations.CompartmentsSuspend, (service, compartment, actor, ct) => service.ResumeAsync(compartment, actor, ct));
+        MapTransition(compartments, "terminate", RegistryOperations.CompartmentsTerminate, (service, compartment, actor, ct) => service.TerminateAsync(compartment, actor, ct));
         MapOwnership(compartments);
     }
 
@@ -189,7 +190,7 @@ public static class RegistryAdminEndpoints
                 Written(http, loggers, "seated the owner of compartment {Compartment}", parsed);
                 return (await service.SeatAsync(parsed, subject, Callers.ActorOf(http), ct)).ToHttpResult();
             })
-            .WithMetadata(RegistryOperations.CompartmentsWrite)
+            .WithMetadata(RegistryOperations.OwnershipDesignate)
             .Produces(StatusCodes.Status204NoContent)
             .ProducesProblem(StatusCodes.Status404NotFound)
             .ProducesProblem(StatusCodes.Status409Conflict);
@@ -228,7 +229,7 @@ public static class RegistryAdminEndpoints
                 Written(http, loggers, "proposed the ownership of compartment {Compartment}", parsed);
                 return Summary(await service.ProposeAsync(parsed, request.To, request.Keep, Callers.ActorOf(http), ct), TransferSummary.Of);
             })
-            .WithMetadata(RegistryOperations.OwnershipWrite)
+            .WithMetadata(RegistryOperations.OwnershipTransfer)
             .Produces<TransferSummary>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status403Forbidden);
@@ -240,7 +241,7 @@ public static class RegistryAdminEndpoints
                 Written(http, loggers, "accepted the ownership of compartment {Compartment}", parsed);
                 return (await service.AcceptAsync(parsed, Callers.ActorOf(http), ct)).ToHttpResult();
             })
-            .WithMetadata(RegistryOperations.OwnershipWrite)
+            .WithMetadata(RegistryOperations.OwnershipTransfer)
             .Produces(StatusCodes.Status204NoContent)
             .ProducesProblem(StatusCodes.Status403Forbidden)
             .ProducesProblem(StatusCodes.Status404NotFound)
@@ -253,13 +254,13 @@ public static class RegistryAdminEndpoints
                 Written(http, loggers, "withdrew the transfer of compartment {Compartment}", parsed);
                 return (await service.CancelAsync(parsed, Callers.ActorOf(http), ct)).ToHttpResult();
             })
-            .WithMetadata(RegistryOperations.OwnershipWrite)
+            .WithMetadata(RegistryOperations.OwnershipTransfer)
             .Produces(StatusCodes.Status204NoContent)
             .ProducesProblem(StatusCodes.Status403Forbidden)
             .ProducesProblem(StatusCodes.Status404NotFound);
     }
 
-    private static void MapTransition(RouteGroupBuilder compartments, string verb, Func<ICompartments, Compartment, Actor, CancellationToken, Task<Result<CompartmentRecord>>> transition)
+    private static void MapTransition(RouteGroupBuilder compartments, string verb, Operation operation, Func<ICompartments, Compartment, Actor, CancellationToken, Task<Result<CompartmentRecord>>> transition)
         => compartments.MapPost($"/{{compartment}}/{verb}", async (string compartment, HttpContext http, ICompartments service, ILoggerFactory loggers, CancellationToken ct) =>
             {
                 if (!Compartment.TryParse(compartment, out var parsed))
@@ -267,7 +268,7 @@ public static class RegistryAdminEndpoints
                 Written(http, loggers, verb + "d compartment {Compartment}", parsed);
                 return Summary(await transition(service, parsed, Callers.ActorOf(http), ct), CompartmentSummary.Of);
             })
-            .WithMetadata(RegistryOperations.CompartmentsWrite)
+            .WithMetadata(operation)
             .Produces<CompartmentSummary>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status404NotFound)
             .ProducesProblem(StatusCodes.Status412PreconditionFailed);
@@ -294,7 +295,7 @@ public static class RegistryAdminEndpoints
                 Written(http, loggers, "deactivated user {Subject}", subject);
                 return Summary(await directory.DeactivateAsync(subject, Callers.ActorOf(http), ct), UserSummary.Of);
             })
-            .WithMetadata(RegistryOperations.DirectoryWrite)
+            .WithMetadata(RegistryOperations.DirectoryDeactivate)
             .Produces<UserSummary>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status404NotFound);
 
@@ -305,7 +306,7 @@ public static class RegistryAdminEndpoints
                 Written(http, loggers, "reactivated user {Subject}", subject);
                 return Summary(await directory.ReactivateAsync(subject, Callers.ActorOf(http), ct), UserSummary.Of);
             })
-            .WithMetadata(RegistryOperations.DirectoryWrite)
+            .WithMetadata(RegistryOperations.DirectoryDeactivate)
             .Produces<UserSummary>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status404NotFound);
     }
@@ -385,7 +386,7 @@ public static class RegistryAdminEndpoints
                     return created.ToHttpResult();
                 return created.Value.Pending is { } pending ? Pending(pending) : Results.Created((string?)null, RoleSummary.Of(created.Value.Value!));
             })
-            .WithMetadata(RegistryOperations.RolesWrite)
+            .WithMetadata(RegistryOperations.RolesCreate)
             .Produces<RoleSummary>(StatusCodes.Status201Created)
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status409Conflict);
@@ -404,7 +405,7 @@ public static class RegistryAdminEndpoints
                     return updated.ToHttpResult();
                 return updated.Value.Pending is { } pending ? Pending(pending) : Results.Ok(RoleSummary.Of(updated.Value.Value!));
             })
-            .WithMetadata(RegistryOperations.RolesWrite)
+            .WithMetadata(RegistryOperations.RolesDefine)
             .Produces<RoleSummary>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status404NotFound);
@@ -416,7 +417,7 @@ public static class RegistryAdminEndpoints
                 Written(http, loggers, "deleted role {Role}", role);
                 return (await service.DeleteAsync(role, Callers.ActorOf(http), ct)).ToHttpResult();
             })
-            .WithMetadata(RegistryOperations.RolesWrite)
+            .WithMetadata(RegistryOperations.RolesDelete)
             .Produces(StatusCodes.Status204NoContent)
             .ProducesProblem(StatusCodes.Status404NotFound)
             .ProducesProblem(StatusCodes.Status412PreconditionFailed);
@@ -447,7 +448,7 @@ public static class RegistryAdminEndpoints
                 Written(http, loggers, "added member {Subject} to {Compartment}", subject, parsed);
                 return (await service.AddAsync(subject, parsed, Callers.ActorOf(http), ct)).ToHttpResult();
             })
-            .WithMetadata(RegistryOperations.MembershipsWrite)
+            .WithMetadata(RegistryOperations.MembershipsAdd)
             .Produces(StatusCodes.Status204NoContent)
             .ProducesProblem(StatusCodes.Status404NotFound)
             .ProducesProblem(StatusCodes.Status412PreconditionFailed);
@@ -461,7 +462,7 @@ public static class RegistryAdminEndpoints
                 Written(http, loggers, "removed member {Subject} from {Compartment}", subject, parsed);
                 return (await service.RemoveAsync(subject, parsed, Callers.ActorOf(http), ct)).ToHttpResult();
             })
-            .WithMetadata(RegistryOperations.MembershipsWrite)
+            .WithMetadata(RegistryOperations.MembershipsRemove)
             .Produces(StatusCodes.Status204NoContent)
             .ProducesProblem(StatusCodes.Status404NotFound);
 
@@ -476,7 +477,7 @@ public static class RegistryAdminEndpoints
                 Written(http, loggers, "assigned role {Role} to {Subject} in {Compartment}", role, subject, parsed);
                 return (await service.AssignRoleAsync(subject, parsed, role, Callers.ActorOf(http), ct)).ToHttpResult();
             })
-            .WithMetadata(RegistryOperations.MembershipsWrite)
+            .WithMetadata(RegistryOperations.MembershipsGrant)
             .Produces(StatusCodes.Status204NoContent)
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status404NotFound)
@@ -493,7 +494,7 @@ public static class RegistryAdminEndpoints
                 Written(http, loggers, "unassigned role {Role} from {Subject} in {Compartment}", role, subject, parsed);
                 return (await service.UnassignRoleAsync(subject, parsed, role, Callers.ActorOf(http), ct)).ToHttpResult();
             })
-            .WithMetadata(RegistryOperations.MembershipsWrite)
+            .WithMetadata(RegistryOperations.MembershipsRevoke)
             .Produces(StatusCodes.Status204NoContent)
             .ProducesProblem(StatusCodes.Status404NotFound);
     }
@@ -524,7 +525,7 @@ public static class RegistryAdminEndpoints
                     return assigned.ToHttpResult();
                 return assigned.Value is { } pending ? Pending(pending) : Results.NoContent();
             })
-            .WithMetadata(RegistryOperations.OperatorsWrite)
+            .WithMetadata(RegistryOperations.OperatorsGrant)
             .Produces(StatusCodes.Status204NoContent)
             .Produces<PendingActSummary>(StatusCodes.Status202Accepted)
             .ProducesProblem(StatusCodes.Status400BadRequest)
@@ -540,7 +541,7 @@ public static class RegistryAdminEndpoints
                 Written(http, loggers, "unassigned platform role {Role} from {Subject}", role, subject);
                 return (await service.UnassignAsync(subject, role, Callers.ActorOf(http), ct)).ToHttpResult();
             })
-            .WithMetadata(RegistryOperations.OperatorsWrite)
+            .WithMetadata(RegistryOperations.OperatorsRevoke)
             .Produces(StatusCodes.Status204NoContent)
             .ProducesProblem(StatusCodes.Status404NotFound);
     }

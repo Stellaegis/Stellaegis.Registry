@@ -11,14 +11,15 @@ public sealed class ModuleTests
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     [Fact]
-    public void The_module_has_no_compartment_and_fifteen_operations()
+    public void The_module_has_no_compartment_and_an_operation_per_gesture()
     {
         Assert.Equal("registry", RegistryModule.Name);
         Assert.Equal(ModuleCompartments.None, RegistryModule.Declaration.Compartments);
-        Assert.Equal(15, RegistryModule.Declaration.Operations.Count);
-        Assert.Contains(RegistryOperations.InvitationsWrite, RegistryModule.Declaration.Operations);
-        Assert.Contains(RegistryOperations.MembershipsWrite, RegistryModule.Declaration.Operations);
-        Assert.Contains(RegistryOperations.OwnershipWrite, RegistryModule.Declaration.Operations);
+        Assert.Equal(26, RegistryModule.Declaration.Operations.Count);
+        Assert.DoesNotContain(RegistryModule.Declaration.Operations, o => o.Name == "write");   // a gesture, never a verb of the wire
+        Assert.Contains(RegistryOperations.InvitationsSend, RegistryModule.Declaration.Operations);
+        Assert.Contains(RegistryOperations.MembershipsGrant, RegistryModule.Declaration.Operations);
+        Assert.Contains(RegistryOperations.OwnershipTransfer, RegistryModule.Declaration.Operations);
         Assert.All(RegistryModule.Declaration.Operations, o => Assert.True(NameRules.IsIdentifier(o.Target) && NameRules.IsIdentifier(o.Name)));
     }
 

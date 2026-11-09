@@ -1,3 +1,4 @@
+using Stellaegis.Primitives;
 using static Stellaegis.Registry.Tests.Fixtures;
 
 namespace Stellaegis.Registry.Tests;
@@ -60,6 +61,20 @@ public abstract class ProjectionTestsBase
     }
 
     [Fact]
+    public async Task An_operation_retired_from_the_catalogue_leaves_the_roles_and_the_rights_of_their_holders()
+    {
+        using var host = await CreateHost().InstalledAsync(Ct);
+        Assert.True((await host.Operators.AssignAsync(Jane, "super_admin", By, Ct)).IsSuccess);
+        Assert.Equal(["compartments.create", "items.purge"], host.Sink.Last(RightsSinkCallKind.ReplaceAdminGrants)!.Values);
+
+        var inventoryWithoutPurge = ModuleDeclaration.Compartmented<InventoryModuleAgain>().WithOperations(ItemsRead, ItemsWrite);
+        await host.Catalog.RecordAsync([inventoryWithoutPurge], Ct);
+
+        Assert.Equal(["compartments.create"], host.Sink.Last(RightsSinkCallKind.ReplaceAdminGrants)!.Values);
+        Assert.DoesNotContain("items.purge", (await host.Roles.GetAsync("super_admin", Ct)).Value.Operations);
+    }
+
+    [Fact]
     public async Task A_platform_role_projects_the_admin_grants()
     {
         using var host = await CreateHost().InstalledAsync(Ct);
@@ -67,7 +82,7 @@ public abstract class ProjectionTestsBase
         Assert.True((await host.Operators.AssignAsync(Jane, "super_admin", By, Ct)).IsSuccess);
 
         var call = Assert.Single(host.Sink.Calls);
-        Assert.Equal(new RightsSinkCall(RightsSinkCallKind.ReplaceAdminGrants, Jane, null, ["compartments.write", "items.purge"]), call);
+        Assert.Equal(new RightsSinkCall(RightsSinkCallKind.ReplaceAdminGrants, Jane, null, ["compartments.create", "items.purge"]), call);
         Assert.Equal(["super_admin"], await host.Operators.ListRolesAsync(Jane, Ct));
 
         Assert.True((await host.Operators.UnassignAsync(Jane, "super_admin", By, Ct)).IsSuccess);
@@ -135,7 +150,7 @@ public abstract class ProjectionTestsBase
         Assert.True((await host.Users.ReactivateAsync(Jane, By, Ct)).IsSuccess);
         Assert.Equal(["acme"], host.Sink.Last(RightsSinkCallKind.ReplaceMemberships)!.Values);
         Assert.Equal(["invoices.read", "items.read"], host.Sink.Last(RightsSinkCallKind.ReplaceUserGrants)!.Values);
-        Assert.Equal(["compartments.write", "items.purge"], host.Sink.Last(RightsSinkCallKind.ReplaceAdminGrants)!.Values);
+        Assert.Equal(["compartments.create", "items.purge"], host.Sink.Last(RightsSinkCallKind.ReplaceAdminGrants)!.Values);
         Assert.Contains(host.Events.Events, e => e is UserChangedEvent { Status: UserStatus.Active, Subject: var s } && s == Jane);
     }
 

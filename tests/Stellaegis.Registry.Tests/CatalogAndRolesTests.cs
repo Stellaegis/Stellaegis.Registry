@@ -21,7 +21,7 @@ public sealed class CatalogAndRolesTests
     }
 
     [Fact]
-    public async Task Recording_again_updates_the_kind_and_removes_nothing()
+    public async Task Recording_again_updates_the_kind_and_retires_what_an_installed_module_no_longer_declares()
     {
         using var host = new TestHost();
         await host.Catalog.RecordAsync([Inventory, Billing], Ct);
@@ -31,9 +31,10 @@ public sealed class CatalogAndRolesTests
         await host.Catalog.RecordAsync([inventoryWithoutPurge], Ct);
 
         var listed = await host.Catalog.ListAsync(Ct);
-        Assert.Equal(5, listed.Count);
+        Assert.Equal(4, listed.Count);
         Assert.Equal(OperationKind.Delete, listed.Single(e => e.Operation == "items.write").Kind);
-        Assert.Contains(listed, e => e.Operation == "items.purge");
+        Assert.DoesNotContain(listed, e => e.Operation == "items.purge");   // its module no longer declares it
+        Assert.Contains(listed, e => e.Operation == "invoices.read");       // billing was not installed this time: left alone
     }
 
     [Fact]

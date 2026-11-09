@@ -6,7 +6,7 @@ namespace Stellaegis.Registry.Tests;
 
 /// <summary>
 /// The three sensitive acts take effect only once a second channel validated them: on screen a person other than the
-/// author, holding validations.write; at the console, the validate verb of the host. The installation applies at once.
+/// author, holding validations.decide; at the console, the validate verb of the host. The installation applies at once.
 /// </summary>
 public sealed class ValidationTests
 {
@@ -19,7 +19,7 @@ public sealed class ValidationTests
     private static readonly Actor Console = Actor.Parse(@"system:SATURN-fred");
 
     /// <summary>
-    /// John an operator — super_admin, every role assignable —, Nina a validator — validations.write, every platform
+    /// John an operator — super_admin, every role assignable —, Nina a validator — validations.decide, every platform
     /// role assignable —, Jane a user; the platform role ops to give. All seated by the installation.
     /// </summary>
     private static async Task<TestHost> PlatformAsync()
@@ -27,7 +27,7 @@ public sealed class ValidationTests
         var host = await new TestHost().InstalledAsync(Ct);
         Assert.True((await host.Users.RecordAsync(Nina, "nina@acme.test", "Nina", By, Ct)).IsSuccess);
         Assert.True((await host.Roles.CreateAsync("validator", RoleScope.Platform, new RoleDefinition(RoleCategory.Administration, "Validator",
-            [RegistryOperations.ValidationsWrite.Identity], AssignableRoles.Every(CompartmentRoleSelector.None, allPlatform: true)), By, Ct)).IsSuccess);
+            [RegistryOperations.ValidationsDecide.Identity], AssignableRoles.Every(CompartmentRoleSelector.None, allPlatform: true)), By, Ct)).IsSuccess);
         Assert.True((await host.Roles.CreateAsync("ops", RoleScope.Platform, new RoleDefinition(RoleCategory.Administration, "Operations", [ItemsPurge.Identity]), By, Ct)).IsSuccess);
         Assert.Null((await host.Operators.AssignAsync(John, "super_admin", By, Ct)).Value);   // the installation: at once
         Assert.Null((await host.Operators.AssignAsync(Nina, "validator", By, Ct)).Value);
@@ -38,7 +38,7 @@ public sealed class ValidationTests
     private static IValidations Validations(TestHost host) => host.Services.GetRequiredService<IValidations>();
 
     [Fact]
-    public async Task A_platform_role_waits_for_a_validation_by_someone_else_holding_validations_write_and_then_takes_effect()
+    public async Task A_platform_role_waits_for_a_validation_by_someone_else_holding_validations_decide_and_then_takes_effect()
     {
         using var host = await PlatformAsync();
 

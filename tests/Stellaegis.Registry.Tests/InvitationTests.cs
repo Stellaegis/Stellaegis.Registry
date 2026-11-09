@@ -17,7 +17,7 @@ public sealed class InvitationTests
     private static readonly string Nina = Guid.Parse("5b6c7d8e-9f01-4a2b-8c3d-4e5f60718293").ToString("N");
 
     /// <summary>
-    /// Acme, John its manager of the accesses — invitations.write, the business roles assignable —, Jane a member, and
+    /// Acme, John its manager of the accesses — invitations.send, the business roles assignable —, Jane a member, and
     /// a sender of e-mails; the hand delivery open when asked.
     /// </summary>
     private static async Task<(TestHost Host, CapturingInvitationSender Sender)> AcmeAsync(bool handDelivery = false)
@@ -29,7 +29,7 @@ public sealed class InvitationTests
             services.Configure<RegistryOptions>(options => options.Invitations.HandDelivery = handDelivery);
         }).InstalledAsync(Ct);
         Assert.True((await host.Roles.CreateAsync("access_manager", RoleScope.Compartment,
-            new RoleDefinition(RoleCategory.Administration, "Access manager", [RegistryOperations.InvitationsWrite.Identity], AssignableRoles.Every(CompartmentRoleSelector.Business)), By, Ct)).IsSuccess);
+            new RoleDefinition(RoleCategory.Administration, "Access manager", [RegistryOperations.InvitationsSend.Identity], AssignableRoles.Every(CompartmentRoleSelector.Business)), By, Ct)).IsSuccess);
         foreach (var subject in new[] { John, Jane })
             Assert.True((await host.Memberships.AddAsync(subject, Acme, By, Ct)).IsSuccess);
         Assert.True((await host.Memberships.AssignRoleAsync(John, Acme, "access_manager", By, Ct)).IsSuccess);
@@ -156,7 +156,7 @@ public sealed class InvitationTests
         Assert.True((await host.Compartments.CreateAsync(initech, "Initech", By, Ct)).IsSuccess);
         // An operator who invites, and whose list covers every compartment role: the owner's.
         Assert.True((await host.Roles.CreateAsync("platform_inviter", RoleScope.Platform,
-            new RoleDefinition(RoleCategory.Administration, "Inviter", [RegistryOperations.InvitationsWrite.Identity], AssignableRoles.Every(CompartmentRoleSelector.All)), By, Ct)).IsSuccess);
+            new RoleDefinition(RoleCategory.Administration, "Inviter", [RegistryOperations.InvitationsSend.Identity], AssignableRoles.Every(CompartmentRoleSelector.All)), By, Ct)).IsSuccess);
         Assert.True((await host.Operators.AssignAsync(Jane, "platform_inviter", By, Ct)).IsSuccess);
 
         Assert.Equal(RegistryErrors.RoleNotAssignableCode, (await invitations.IssueAsync(initech, "boss@initech.test", [], InvitationDelivery.Email, AsJohn, designatesOwner: true, Ct)).Error!.Code);

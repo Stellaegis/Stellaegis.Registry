@@ -167,7 +167,7 @@ public interface IInvitationStore
 /// The invitations: an assignment deferred (I3). Issuing is controlled as an assignment is — every role in the
 /// assignable lists of the author's roles, a member of the compartment never invited, nobody inviting their own
 /// address —; accepting checks everything again, all or nothing (Q3): the address of the account is the address
-/// invited, verified (Q2); the author is still active, still holds <c>invitations.write</c>, and may still assign
+/// invited, verified (Q2); the author is still active, still holds <c>invitations.send</c>, and may still assign
 /// every role; the compartment is still active. The membership and the roles then carry the author as their grantor.
 /// </summary>
 public interface IInvitations
@@ -395,8 +395,8 @@ internal sealed class Invitations(
         var authorRecord = await users.GetAsync(RegistryRules.NormalizeSubject(author.Value), cancellationToken).ConfigureAwait(false);
         if (authorRecord is null || authorRecord.Status != UserStatus.Active)
             return "its author is no longer an active user";
-        if (!await rules.HoldsAsync(author, invitation.Compartment, RegistryOperations.InvitationsWrite.Identity, cancellationToken).ConfigureAwait(false))
-            return "its author no longer holds invitations.write";
+        if (!await rules.HoldsAsync(author, invitation.Compartment, RegistryOperations.InvitationsSend.Identity, cancellationToken).ConfigureAwait(false))
+            return "its author no longer holds invitations.send";
         foreach (var role in invitation.Roles)
             if (await roles.GetAsync(role, cancellationToken).ConfigureAwait(false) is null)
                 return $"role '{role}' no longer exists";

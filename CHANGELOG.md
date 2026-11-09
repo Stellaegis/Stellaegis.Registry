@@ -7,6 +7,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **The operations name the gestures, and the `write` operations are gone.** `compartments.write` becomes
+  `compartments.create`, `.rename`, `.suspend` — suspending and resuming — and `.terminate`, the seating of an owner
+  `ownership.designate`; `directory.write` becomes `directory.deactivate`; `roles.write` `roles.create`, `.define`,
+  `.delete`; `memberships.write` `memberships.add`, `.remove`, `.grant`, `.revoke`; `operators.write`
+  `operators.grant`, `.revoke`; `invitations.write` `invitations.send`, `.cancel`; `ownership.write`, the transfer,
+  `ownership.transfer`; `validations.write` `validations.decide`. A role that held one of the former grants nothing by it any more: the installation retires
+  them.
+- **Recording the catalogue retires what a module recorded no longer declares**, from the catalogue and from the
+  roles that held it, whose holders are projected again. It removed nothing: an operation renamed stayed, granting
+  nothing. Only the modules recorded are read, another host's left alone. `ICatalogStore.RetireAsync`.
+
+
 ## [6.0.0] — 2026-10-23
 
 Who may grant what, reviewed for its security, and the stores on SQL Server. A role now says what its holder may

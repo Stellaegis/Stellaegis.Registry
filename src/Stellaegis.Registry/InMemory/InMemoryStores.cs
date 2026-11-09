@@ -179,6 +179,22 @@ internal sealed class InMemoryCatalogStore(InMemoryRegistryData data) : ICatalog
                 data.Catalog[operation] = entry with { HardenedSecondFactor = true };
         return Task.CompletedTask;
     }
+
+    public Task<IReadOnlyList<string>> RetireAsync(IReadOnlyCollection<string> operations, CancellationToken cancellationToken = default)
+    {
+        var retired = operations.ToHashSet(StringComparer.Ordinal);
+        var touched = new List<string>();
+        foreach (var (name, role) in data.Roles)
+        {
+            if (!role.Operations.Any(retired.Contains))
+                continue;
+            data.Roles[name] = role with { Operations = role.Operations.Where(operation => !retired.Contains(operation)).ToList() };
+            touched.Add(name);
+        }
+        foreach (var operation in retired)
+            data.Catalog.TryRemove(operation, out _);
+        return Task.FromResult<IReadOnlyList<string>>(touched.Order(StringComparer.Ordinal).ToList());
+    }
 }
 
 internal sealed class InMemoryRoleStore(InMemoryRegistryData data) : IRoleStore

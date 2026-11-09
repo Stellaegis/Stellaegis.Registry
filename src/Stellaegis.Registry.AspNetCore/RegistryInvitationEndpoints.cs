@@ -16,9 +16,9 @@ namespace Stellaegis.Registry.AspNetCore;
 /// </summary>
 /// <remarks>
 /// <list type="bullet">
-///   <item><c>POST registry/compartments/{compartment}/invitations</c> (201) — <c>invitations.write</c>: the token is in the answer, this once, for a link handed over</item>
+///   <item><c>POST registry/compartments/{compartment}/invitations</c> (201) — <c>invitations.send</c>: the token is in the answer, this once, for a link handed over</item>
 ///   <item><c>GET registry/compartments/{compartment}/invitations</c> — <c>memberships.read</c></item>
-///   <item><c>DELETE registry/invitations/{id}</c> — <c>invitations.write</c>: its author, the owner of its compartment, or anyone who could issue it</item>
+///   <item><c>DELETE registry/invitations/{id}</c> — <c>invitations.cancel</c>: its author, the owner of its compartment, or anyone who could issue it</item>
 /// </list>
 /// The acceptance is no route of the administration: the page of the accounts calls <see cref="IInvitations"/> in process.
 /// </remarks>
@@ -57,7 +57,7 @@ public static class RegistryInvitationEndpoints
                     ? Results.Created((string?)null, new InvitationIssued(InvitationSummary.Of(issued.Value.Invitation), issued.Value.Token))
                     : issued.ToHttpResult();
             })
-            .WithMetadata(RegistryOperations.InvitationsWrite)
+            .WithMetadata(RegistryOperations.InvitationsSend)
             .Produces<InvitationIssued>(StatusCodes.Status201Created)
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status403Forbidden)
@@ -72,7 +72,7 @@ public static class RegistryInvitationEndpoints
 
         group.MapDelete("/invitations/{id:guid}", async (Guid id, HttpContext http, IInvitations service, CancellationToken ct) =>
                 (await service.RevokeAsync(id, Callers.ActorOf(http), ct)).ToHttpResult())
-            .WithMetadata(RegistryOperations.InvitationsWrite)
+            .WithMetadata(RegistryOperations.InvitationsCancel)
             .Produces(StatusCodes.Status204NoContent)
             .ProducesProblem(StatusCodes.Status403Forbidden)
             .ProducesProblem(StatusCodes.Status404NotFound)

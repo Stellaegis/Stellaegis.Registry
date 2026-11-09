@@ -310,9 +310,9 @@ public static class RegistryErrors
     public static Error OwnAct()
         => Error.Forbidden(OwnActCode, "Nobody validates their own act on screen; the validate verb of the host is the other channel.");
 
-    /// <summary>The author of the validation does not hold validations.write by a platform role.</summary>
+    /// <summary>The author of the validation does not hold validations.decide by a platform role.</summary>
     public static Error NotValidator()
-        => Error.Forbidden(NotValidatorCode, "The author of the validation holds no platform role carrying validations.write.");
+        => Error.Forbidden(NotValidatorCode, "The author of the validation holds no platform role carrying validations.decide.");
 
     /// <summary>The catalogue is written by the installation only.</summary>
     public static Error CatalogInstallationOnly()

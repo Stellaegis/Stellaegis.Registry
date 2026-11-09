@@ -69,6 +69,12 @@ public interface ICatalogStore
     /// <summary>Inserts each entry, or replaces its module, kind and declared second factor; never its hardening; removes nothing.</summary>
     Task SaveAsync(IReadOnlyCollection<CatalogEntry> entries, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Removes the operations from every role that holds them, then from the catalogue, in one transaction, and returns
+    /// the roles that lost one: their holders are projected again.
+    /// </summary>
+    Task<IReadOnlyList<string>> RetireAsync(IReadOnlyCollection<string> operations, CancellationToken cancellationToken = default);
+
     /// <summary>Makes the operations require a second factor, beyond their declaration.</summary>
     Task HardenAsync(IReadOnlyCollection<string> operations, CancellationToken cancellationToken = default);
 }

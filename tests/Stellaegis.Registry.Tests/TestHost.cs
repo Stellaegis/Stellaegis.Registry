@@ -113,7 +113,7 @@ internal static class Fixtures
 
     public static readonly RoleDeclaration Reader = new("reader", RoleScope.Compartment, RoleCategory.Business, "Reader", [ItemsRead, InvoicesRead]);
     public static readonly RoleDeclaration Accountant = new("accountant", RoleScope.Compartment, RoleCategory.Business, "Accountant", [InvoicesRead, InvoicesIssue]);
-    public static readonly RoleDeclaration SuperAdmin = new("super_admin", RoleScope.Platform, RoleCategory.Administration, "Platform administrator", [ItemsPurge, RegistryOperations.CompartmentsWrite],
+    public static readonly RoleDeclaration SuperAdmin = new("super_admin", RoleScope.Platform, RoleCategory.Administration, "Platform administrator", [ItemsPurge, RegistryOperations.CompartmentsCreate],
         AssignableRoles.Every(CompartmentRoleSelector.All, allPlatform: true));
     public static readonly IReadOnlyList<RoleDeclaration> DeclaredRoles = [Reader, Accountant, SuperAdmin];
 
