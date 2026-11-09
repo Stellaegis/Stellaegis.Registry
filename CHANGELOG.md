@@ -30,7 +30,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   must both reach the person, the act spent once. By the script `0002`, `reg.pending_acts.consumed_at` and the
   constraints of its kinds, on both engines: an installation takes it by running again. `PendingAct.ConsumedAt`,
   `IPendingActStore.TryConsumeAsync`.
-- **Stellaegis.Primitives 5.5.0**, for `Subject`; Microsoft.Extensions 10.0.14.
+- **Stellaegis.Primitives 5.5.0**, for `Subject`; Microsoft.Extensions 10.0.14; Stellaegis.Identity 9.0.0 for the
+  example and the composition.
+
+### Added
+
+- **`Stellaegis.Registry.Identity`, a package of composition**: the ports `Stellaegis.Identity` 9 declares, answered
+  by the registry — `IHandDeliveryApprovals` by the act `hand_delivery`, `IInvitationAcceptance` by the invitations,
+  the account recorded in the directory before it accepts. `AddStellaegisRegistryIdentity()`.
+  The example composes them; its own operation `items.write` is `items.add`.
 
 
 ## [6.0.0] — 2026-10-23

@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/Stellaegis.Registry.AspNetCore/Stellaegis.Registry.AspNetCore.csproj" />
+    <Project Path="src/Stellaegis.Registry.Identity/Stellaegis.Registry.Identity.csproj" />
     <Project Path="src/Stellaegis.Registry.PostgreSQL/Stellaegis.Registry.PostgreSQL.csproj" />
     <Project Path="src/Stellaegis.Registry.SqlServer/Stellaegis.Registry.SqlServer.csproj" />
     <Project Path="src/Stellaegis.Registry/Stellaegis.Registry.csproj" />

@@ -13,6 +13,7 @@
     <PackageReference Include="Microsoft.AspNetCore.TestHost" />
     <PackageReference Include="Npgsql" />
     <PackageReference Include="Microsoft.Data.SqlClient" />
+    <PackageReference Include="Stellaegis.Identity.AspNetCore" />
   </ItemGroup>
 
   <ItemGroup>
@@ -20,6 +21,7 @@
     <ProjectReference Include="..\..\src\Stellaegis.Registry.PostgreSQL\Stellaegis.Registry.PostgreSQL.csproj" />
     <ProjectReference Include="..\..\src\Stellaegis.Registry.SqlServer\Stellaegis.Registry.SqlServer.csproj" />
     <ProjectReference Include="..\..\src\Stellaegis.Registry.AspNetCore\Stellaegis.Registry.AspNetCore.csproj" />
+    <ProjectReference Include="..\..\src\Stellaegis.Registry.Identity\Stellaegis.Registry.Identity.csproj" />
   </ItemGroup>
 
   <ItemGroup>

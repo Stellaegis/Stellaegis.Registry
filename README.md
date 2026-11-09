@@ -23,10 +23,12 @@ The library targets .NET 10 and is released under the MIT license.
 | `Stellaegis.Registry` | The compartments and their owners, the users, the catalogue, the roles, the memberships, the operators, the invitations, the validations; the effective rights and the `IRightsSink` port; the module and its operations; the role declarations; the in-memory stores | `Stellaegis.Primitives`, `Stellaegis.Primitives.Hosting` |
 | `Stellaegis.Registry.PostgreSQL` | The stores on PostgreSQL, and the `reg` schema declared as a module database for the installation and the verification | `Stellaegis.Primitives.Data`, Npgsql, Dapper |
 | `Stellaegis.Registry.SqlServer` | The same stores and the same `reg` schema on SQL Server | `Stellaegis.Primitives.Data`, Microsoft.Data.SqlClient, Dapper |
-| `Stellaegis.Registry.AspNetCore` | The administration routes, each under its operation, decided in the shared space; the invitation routes | `Stellaegis.Primitives.AspNetCore`, ASP.NET Core |
+| `Stellaegis.Registry.AspNetCore` | The administration routes, each under its operation, decided in the shared space; the invitation routes; the rule on a person, the authorization of a `Subject` | `Stellaegis.Primitives.AspNetCore`, ASP.NET Core |
+| `Stellaegis.Registry.Identity` | The registry and `Stellaegis.Identity` composed: the ports of the accounts answered by the registry — the second person who approves a reset link handed over, the invitation an account accepts | `Stellaegis.Registry`, `Stellaegis.Identity` |
 
-The four packages share one version. They started at the major version of Stellaegis.Primitives, 5; 6.0.0 runs on
-Primitives 5.3.0.
+The packages share one version. They started at the major version of Stellaegis.Primitives, 5; 7.0.0 runs on
+Primitives 5.5.0. `Stellaegis.Registry.Identity` is the one package that depends on another module of the family: a
+package of composition, the one place the registry and the accounts meet, so that no host copies the bridge.
 
 ## A host, in full
 
@@ -80,7 +82,7 @@ Access. Without a sink registered, the snapshots go nowhere and a warning says s
 The registry is one link of a chain, and not the first:
 
 1. **Declare**, in code. Every module declares its operations on its `ModuleDeclaration` — `items.read`,
-   `items.write`, and whether one requires a second factor —, and the application declares the roles it ships
+   `items.add`, and whether one requires a second factor —, and the application declares the roles it ships
    with, `RoleDeclaration`: a name, a scope, a category, a display name, a set of operations, the roles it lets its
    holder assign.
 2. **Install**, apart from serving. The installation records the catalogue from what the modules declare,
@@ -346,6 +348,21 @@ case UserBlockedEvent blocked:
     await directory.DeactivateAsync(blocked.UserUniqueId.ToString("N"), Actor.Job("identity"), ct);
     break;
 ```
+
+### The ports of the accounts
+
+`Stellaegis.Identity` declares what it asks of a rights system, and `Stellaegis.Registry.Identity` answers it, by one
+call after both are registered:
+
+```csharp
+builder.Services.AddStellaegisRegistryAdministration();   // the rule on a person: Identity's gestures on an account ask it
+builder.Services.AddStellaegisRegistryIdentity();         // IHandDeliveryApprovals and IInvitationAcceptance
+```
+
+- `IHandDeliveryApprovals`: a reset link handed over for an active account is the act `hand_delivery`, which a second
+  person validates — on screen, one who reaches the person too —, and its author spends once.
+- `IInvitationAcceptance`: the page `/invitation` of the accounts previews and accepts the registry's invitations;
+  the account that accepts is recorded in the directory first, by its person.
 
 ## Every write names its actor
 

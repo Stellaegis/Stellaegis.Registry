@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Stellaegis.Registry.Identity</RootNamespace>
+    <PackageId>Stellaegis.Registry.Identity</PackageId>
+    <Description>Stellaegis Registry and Stellaegis Identity composed: the ports the accounts declare, answered by the registry — the second person who approves a reset link handed over, the invitation an account is created and accepted on. A package of composition, the one place the two meet.</Description>
+    <PackageTags>stellaegis;registry;identity;composition;invitations;validation</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Stellaegis.Registry\Stellaegis.Registry.csproj" />
+    <PackageReference Include="Stellaegis.Identity" />
+    <InternalsVisibleTo Include="Stellaegis.Registry.Tests" />
+  </ItemGroup>
+
+</Project>
