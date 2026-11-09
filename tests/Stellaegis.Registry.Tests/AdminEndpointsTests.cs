@@ -229,6 +229,28 @@ public sealed class AdminEndpointsTests
     }
 
     [Fact]
+    public async Task A_token_naming_a_job_is_never_the_installation()
+    {
+        // The registry lifts its bounds for a job: a platform role assigned at once, without the act a second person
+        // validates. Only the code names a job; a token naming one, granted whatever the host's policy grants, fails.
+        await using var app = await StartAsync(MapPerOperation);
+        var job = app.ClientAs("job:install", Everything);
+
+        HttpResponseMessage? assigned = null;
+        try
+        {
+            assigned = await job.PutAsync($"/api/admin/registry/operators/{Jane}/roles/super_admin", null, Ct);
+        }
+        catch (InvalidOperationException)
+        {
+            // The test server hands the failure of the request over as it is.
+        }
+        Assert.False(assigned?.IsSuccessStatusCode ?? false, $"answered {assigned?.StatusCode}");
+        var jane = await app.ClientAs("operator", Reads).GetFromJsonAsync<OperatorSummary>($"/api/admin/registry/operators/{Jane}", Ct);
+        Assert.Empty(jane!.Roles);
+    }
+
+    [Fact]
     public async Task A_caller_with_the_reads_only_is_refused_the_writes_and_an_unauthenticated_one_challenged()
     {
         await using var app = await StartAsync(MapPerOperation);

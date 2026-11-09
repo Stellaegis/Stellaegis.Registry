@@ -8,7 +8,9 @@ namespace Stellaegis.Registry.AspNetCore;
 /// <summary>
 /// Reads the actor of a request from the principal the host authenticated. The routes of the registry read no
 /// request context, the module having no compartments: the actor of a write comes from the claims, as the
-/// administration routes of Identity read it — <c>NameIdentifier</c>, <c>sub</c>, then <c>client_id</c>.
+/// administration routes of Identity read it — <c>NameIdentifier</c>, <c>sub</c>, then <c>client_id</c>. A claim is
+/// read with <see cref="Actor.TryParseClaim"/>: a token naming a job, <c>job:…</c>, names nobody — the registry lifts
+/// its bounds for a job, which only the code writes.
 /// </summary>
 internal static class Callers
 {
@@ -22,28 +24,32 @@ internal static class Callers
         foreach (var type in ActorClaims)
         {
             if (user.FindFirst(type)?.Value is { } value)
-                return Actor.TryParse(value, out var actor) ? actor : null;
+                return Actor.TryParseClaim(value, out var actor) ? actor : null;
         }
         return null;
     }
 
     /// <summary>The actor of the request, never <see langword="null"/>.</summary>
-    /// <exception cref="InvalidOperationException">An authenticated principal carries none of the claims, or a value that is not an actor.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// An authenticated principal carries none of the claims, a value that is not an actor, a job, or the anonymous actor
+    /// of the frame: the request fails, as the request context of Primitives fails it.
+    /// </exception>
     public static Actor ActorOf(HttpContext httpContext)
     {
         var user = httpContext.User;
+        var anonymous = httpContext.RequestServices.GetStellaegisFrame().AnonymousActor;
         if (user.Identity?.IsAuthenticated != true)
-            return httpContext.RequestServices.GetStellaegisFrame().AnonymousActor;
+            return anonymous;
 
         foreach (var type in ActorClaims)
         {
             if (user.FindFirst(type)?.Value is not { } value)
                 continue;
-            if (Actor.TryParse(value, out var actor))
+            if (Actor.TryParseClaim(value, out var actor) && actor != anonymous)
                 return actor;
             throw new InvalidOperationException(
-                $"The claim {type} of the authenticated user is not an actor: '{value}'. An actor is 1 to {Actor.MaxLength} "
-                + "characters without control characters nor surrounding whitespace.");
+                $"The claim {type} of the authenticated user is not an actor a token may name: '{value}'. An actor is 1 to "
+                + $"{Actor.MaxLength} characters without control characters nor surrounding whitespace, never a job nor '{anonymous}'.");
         }
         throw new InvalidOperationException(
             "The authenticated user carries none of the claims an actor is read from: NameIdentifier, sub, client_id. "
