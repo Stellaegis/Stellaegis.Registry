@@ -369,6 +369,18 @@ internal sealed class InMemoryInvitationStore(InMemoryRegistryData data) : IInvi
 
 internal sealed class InMemoryPendingActStore(InMemoryRegistryData data) : IPendingActStore
 {
+    public Task<bool> TryConsumeAsync(Guid actId, string subject, Actor proposedBy, DateTimeOffset now, CancellationToken cancellationToken = default)
+    {
+        lock (data.Acts)
+        {
+            if (!data.Acts.TryGetValue(actId, out var act) || act.Kind != PendingActKind.HandDelivery || act.Subject != subject
+                || act.Proposed.By != proposedBy || act.Validated is null || act.ConsumedAt is not null || now >= act.ExpiresAt)
+                return Task.FromResult(false);
+            data.Acts[actId] = act with { ConsumedAt = now };
+            return Task.FromResult(true);
+        }
+    }
+
     public Task InsertAsync(PendingAct act, CancellationToken cancellationToken = default)
     {
         data.Acts[act.ActId] = act;

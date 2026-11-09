@@ -39,7 +39,7 @@ public sealed record TransferSummary(string Compartment, string From, string To,
 
 /// <summary>An act waiting for its validation, or closed, as the routes answer it.</summary>
 /// <param name="ActId">Its identity, to validate or reject it by.</param>
-/// <param name="Kind"><c>platform_role</c>, <c>role_definition</c> or <c>ownership_rescue</c>.</param>
+/// <param name="Kind"><c>platform_role</c>, <c>role_definition</c>, <c>ownership_rescue</c> or <c>hand_delivery</c>.</param>
 /// <param name="Subject">The user it concerns, or <see langword="null"/>.</param>
 /// <param name="Role">The role it assigns or defines, or <see langword="null"/>.</param>
 /// <param name="Compartment">The compartment it rescues, or <see langword="null"/>.</param>
@@ -57,7 +57,8 @@ public sealed record PendingActSummary(
             {
                 PendingActKind.PlatformRole => "platform_role",
                 PendingActKind.RoleDefinition => "role_definition",
-                _ => "ownership_rescue",
+                PendingActKind.OwnershipRescue => "ownership_rescue",
+                _ => "hand_delivery",
             }, act.Subject, act.Role, act.Compartment?.Value, act.Proposed.At, act.Proposed.By.Value, act.ExpiresAt,
             act.Validated?.By.Value, act.Rejected?.By.Value);
 }

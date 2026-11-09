@@ -120,6 +120,13 @@ internal sealed class PostgreSqlRegistryStore
         return await uow.Repo<PendingActRepository>().ListAsync(null, cancellationToken).ConfigureAwait(false);
     }
 
+    async Task<bool> IPendingActStore.TryConsumeAsync(Guid actId, string subject, Actor proposedBy, DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        Guard.NotNull(proposedBy);
+        await using var uow = await _units.OpenAsync(cancellationToken).ConfigureAwait(false);
+        return await uow.Repo<PendingActRepository>().ConsumeAsync(actId, subject, proposedBy.Value, now, cancellationToken).ConfigureAwait(false);
+    }
+
     async Task<bool> IPendingActStore.MarkValidatedAsync(Guid actId, Stamp validated, CancellationToken cancellationToken)
     {
         await using var uow = await _units.OpenAsync(cancellationToken).ConfigureAwait(false);

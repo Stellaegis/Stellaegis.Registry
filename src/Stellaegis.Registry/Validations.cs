@@ -13,6 +13,13 @@ public enum PendingActKind
 
     /// <summary>The rescue of a compartment whose owner is unreachable, gone or dead: another owner seated by the platform.</summary>
     OwnershipRescue,
+
+    /// <summary>
+    /// A reset link of an active account handed over to an administrator — the way back for a person who lost both their
+    /// mailbox and their password, and the way in for an administrator who would take an account. Validated, it
+    /// changes nothing here: its author spends it once, for that person, through the accounts.
+    /// </summary>
+    HandDelivery,
 }
 
 /// <summary>Where a validation comes from.</summary>
@@ -45,9 +52,10 @@ public enum ValidationChannel
 /// <param name="ExpiresAt">When it lapses, unvalidated.</param>
 /// <param name="Validated">When and by whom it was validated, or <see langword="null"/>.</param>
 /// <param name="Rejected">When and by whom it was rejected or withdrawn, or <see langword="null"/>.</param>
+/// <param name="ConsumedAt">When a hand delivery validated was spent by its author, or <see langword="null"/>.</param>
 public sealed record PendingAct(
     Guid ActId, PendingActKind Kind, string? Subject, string? Role, Compartment? Compartment, RoleScope? Scope, RoleDefinition? Definition,
-    Stamp Proposed, DateTimeOffset ExpiresAt, Stamp? Validated = null, Stamp? Rejected = null)
+    Stamp Proposed, DateTimeOffset ExpiresAt, Stamp? Validated = null, Stamp? Rejected = null, DateTimeOffset? ConsumedAt = null)
 {
     /// <summary>How long an act waits for its validation: seven days.</summary>
     public static readonly TimeSpan Lifetime = TimeSpan.FromDays(7);
@@ -78,6 +86,13 @@ public interface IPendingActStore
     /// <summary>Every act, closed ones included, the newest first.</summary>
     Task<IReadOnlyList<PendingAct>> ListAsync(CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Spends a hand delivery validated, for <paramref name="subject"/> and the author <paramref name="proposedBy"/>,
+    /// before it lapses at <paramref name="now"/>: whether it did — the check and the spending are one, of two at once,
+    /// one passes.
+    /// </summary>
+    Task<bool> TryConsumeAsync(Guid actId, string subject, Actor proposedBy, DateTimeOffset now, CancellationToken cancellationToken = default);
+
     /// <summary>Closes the act as validated when it is still open; whether it was — of two validations at once, one passes.</summary>
     Task<bool> MarkValidatedAsync(Guid actId, Stamp validated, CancellationToken cancellationToken = default);
 
@@ -102,10 +117,25 @@ public interface IValidations
 
     /// <summary>Rejects the act: its author withdraws it, or whoever could validate it refuses it.</summary>
     Task<Result> RejectAsync(Guid actId, Actor actor, ValidationChannel channel, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Proposes to hand a reset link of the account of <paramref name="subject"/> over to <paramref name="actor"/>: an act
+    /// that waits for a second person — on screen, one who also reaches the person (<see cref="IUserDirectory.ReachesAsync"/>),
+    /// never its author — or for the console. The actor must reach the person. Validated, the act changes nothing here;
+    /// <see cref="TryConsumeHandDeliveryAsync"/> spends it.
+    /// </summary>
+    Task<Result<PendingAct>> ProposeHandDeliveryAsync(string subject, Actor actor, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Whether <paramref name="actId"/> is a hand delivery validated, for <paramref name="subject"/>, proposed by
+    /// <paramref name="actor"/>, not lapsed nor spent: <see langword="true"/> spends it, once.
+    /// </summary>
+    Task<bool> TryConsumeHandDeliveryAsync(Guid actId, string subject, Actor actor, CancellationToken cancellationToken = default);
 }
 
 internal sealed class Validations(
     IPendingActStore store,
+    ActProposals proposals,
     IUserStore users,
     IRoleStore roles,
     IOperatorStore operators,
@@ -133,7 +163,11 @@ internal sealed class Validations(
         {
             PendingActKind.PlatformRole => await operatorService.ApplyAsync(act.Subject!, act.Role!, act.Proposed.By, cancellationToken).ConfigureAwait(false),
             PendingActKind.RoleDefinition => await roleService.ApplyAsync(act.Role!, act.Scope!.Value, act.Definition!, act.Proposed.By, cancellationToken).ConfigureAwait(false),
-            _ => await ownership.ApplyRescueAsync(act.Compartment!, act.Subject!, act.Proposed.By, cancellationToken).ConfigureAwait(false),
+            PendingActKind.OwnershipRescue => await ownership.ApplyRescueAsync(act.Compartment!, act.Subject!, act.Proposed.By, cancellationToken).ConfigureAwait(false),
+            // Nothing to apply here: its author spends it, through the accounts.
+            _ => await rules.ReachesAsync(act.Proposed.By, act.Subject!, cancellationToken).ConfigureAwait(false) is { } beyond
+                ? Result.Failure(beyond)
+                : Result.Success(),
         };
         if (applied.IsFailure)
             return applied;
@@ -160,6 +194,24 @@ internal sealed class Validations(
             return Result.Failure(RegistryErrors.ActClosed());
         await publisher.PublishAsync(new PendingActClosedEvent { OccurredAt = now, ActId = actId, Kind = act!.Kind, Validated = false, ProposedBy = act.Proposed.By, By = actor }, cancellationToken).ConfigureAwait(false);
         return Result.Success();
+    }
+
+    public async Task<Result<PendingAct>> ProposeHandDeliveryAsync(string subject, Actor actor, CancellationToken cancellationToken = default)
+    {
+        subject = RegistryRules.NormalizeSubject(subject);
+        Guard.NotNull(actor);
+        if (await users.GetAsync(subject, cancellationToken).ConfigureAwait(false) is null)
+            return Result.Failure<PendingAct>(RegistryErrors.UserNotFound(subject));
+        if (await rules.ReachesAsync(actor, subject, cancellationToken).ConfigureAwait(false) is { } beyond)
+            return Result.Failure<PendingAct>(beyond);
+        return await proposals.ProposeAsync(PendingActKind.HandDelivery, subject, role: null, compartment: null, scope: null, definition: null, actor, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<bool> TryConsumeHandDeliveryAsync(Guid actId, string subject, Actor actor, CancellationToken cancellationToken = default)
+    {
+        Guard.NotNull(actor);
+        return RegistryRules.IsSubject(subject)
+            && await store.TryConsumeAsync(actId, RegistryRules.NormalizeSubject(subject), actor, time.GetUtcNow(), cancellationToken).ConfigureAwait(false);
     }
 
     private Result Open(PendingAct? act)
@@ -192,6 +244,8 @@ internal sealed class Validations(
                 return await rules.CheckAsync(actor, act.Subject!, compartment: null, [act.Role!], cancellationToken).ConfigureAwait(false);
             case PendingActKind.RoleDefinition when all.TryGetValue(act.Role!, out var defined):
                 return await roleService.HeldByAsync(defined, actor, cancellationToken).ConfigureAwait(false) ? RegistryErrors.RoleHeldByAuthor(defined.Name) : null;
+            case PendingActKind.HandDelivery:
+                return await rules.ReachesAsync(actor, act.Subject!, cancellationToken).ConfigureAwait(false);
             default:
                 return null;
         }

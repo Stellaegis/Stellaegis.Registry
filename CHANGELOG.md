@@ -25,6 +25,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `Stellaegis.Identity` 9 that act on an account. A refusal fails the requirement, whatever another handler says.
   `POST users/{subject}/deactivate` and `…/reactivate` load the person; who may deactivate a colleague no longer
   deactivates the administrator.
+- **A reset link handed over for an active account waits for a second person**: the act `hand_delivery`,
+  `IValidations.ProposeHandDeliveryAsync` and `TryConsumeHandDeliveryAsync` — the author and the validator on screen
+  must both reach the person, the act spent once. By the script `0002`, `reg.pending_acts.consumed_at` and the
+  constraints of its kinds, on both engines: an installation takes it by running again. `PendingAct.ConsumedAt`,
+  `IPendingActStore.TryConsumeAsync`.
 - **Stellaegis.Primitives 5.5.0**, for `Subject`; Microsoft.Extensions 10.0.14.
 
 

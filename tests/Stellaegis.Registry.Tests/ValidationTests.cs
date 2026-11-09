@@ -38,6 +38,30 @@ public sealed class ValidationTests
     private static IValidations Validations(TestHost host) => host.Services.GetRequiredService<IValidations>();
 
     [Fact]
+    public async Task A_reset_link_in_hand_waits_for_a_second_person_who_reaches_the_person_too_and_is_spent_once()
+    {
+        using var host = await PlatformAsync();
+        Assert.True((await host.Memberships.AddAsync(Jane, Acme, By, Ct)).IsSuccess);
+        Assert.True((await host.Memberships.AssignRoleAsync(Jane, Acme, "reader", By, Ct)).IsSuccess);
+        var validations = Validations(host);
+
+        Assert.Equal(RegistryErrors.RoleNotAssignableCode, (await validations.ProposeHandDeliveryAsync(Jane, AsNina, Ct)).Error!.Code);   // Nina does not reach a reader
+        Assert.Equal(RegistryErrors.OwnRolesCode, (await validations.ProposeHandDeliveryAsync(John, AsJohn, Ct)).Error!.Code);
+        var act = (await validations.ProposeHandDeliveryAsync(Jane, AsJohn, Ct)).Value;
+        Assert.Equal((PendingActKind.HandDelivery, Jane), (act.Kind, act.Subject));
+
+        Assert.False(await validations.TryConsumeHandDeliveryAsync(act.ActId, Jane, AsJohn, Ct));   // waits
+        Assert.Equal(RegistryErrors.OwnActCode, (await validations.ValidateAsync(act.ActId, AsJohn, ValidationChannel.Screen, Ct)).Error!.Code);
+        Assert.Equal(RegistryErrors.RoleNotAssignableCode, (await validations.ValidateAsync(act.ActId, AsNina, ValidationChannel.Screen, Ct)).Error!.Code);   // nor does she validate for one
+        Assert.True((await validations.ValidateAsync(act.ActId, Console, ValidationChannel.Console, Ct)).IsSuccess);
+
+        Assert.False(await validations.TryConsumeHandDeliveryAsync(act.ActId, Jane, AsNina, Ct));   // its author only
+        Assert.False(await validations.TryConsumeHandDeliveryAsync(act.ActId, Nina, AsJohn, Ct));   // for its person only
+        Assert.True(await validations.TryConsumeHandDeliveryAsync(act.ActId, Jane, AsJohn, Ct));
+        Assert.False(await validations.TryConsumeHandDeliveryAsync(act.ActId, Jane, AsJohn, Ct));   // once
+    }
+
+    [Fact]
     public async Task A_platform_role_waits_for_a_validation_by_someone_else_holding_validations_decide_and_then_takes_effect()
     {
         using var host = await PlatformAsync();

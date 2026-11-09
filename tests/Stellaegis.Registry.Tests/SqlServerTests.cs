@@ -100,10 +100,10 @@ public sealed class SqlServerStoreTests(SqlServerFixture database) : RegistrySto
     }
 
     [Fact]
-    public void The_declaration_runs_on_SqlServer_with_its_own_script()
+    public void The_declaration_runs_on_SqlServer_with_its_own_scripts()
     {
         Assert.Equal(DatabaseEngine.SqlServer, RegistryDatabase.Value.Engine);
-        Assert.Equal(["0001_reg.sql"], RegistryDatabase.Value.Scripts.Select(script => script.FileName));
+        Assert.Equal(["0001_reg.sql", "0002_reg.sql"], RegistryDatabase.Value.Scripts.Select(script => script.FileName));
         Assert.Contains("collate Latin1_General_100_BIN2", RegistryDatabase.Value.Scripts[0].Sql);
     }
 }

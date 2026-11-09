@@ -675,7 +675,7 @@ internal sealed class PendingActRepository(DbConnection connection, Func<DbTrans
 {
     private sealed record Row(
         Guid ActId, string Kind, string? Subject, string? Role, string? Compartment, string? Definition, DateTimeOffset ProposedAt, string ProposedBy,
-        DateTimeOffset ExpiresAt, DateTimeOffset? ValidatedAt, string? ValidatedBy, DateTimeOffset? RejectedAt, string? RejectedBy);
+        DateTimeOffset ExpiresAt, DateTimeOffset? ValidatedAt, string? ValidatedBy, DateTimeOffset? RejectedAt, string? RejectedBy, DateTimeOffset? ConsumedAt);
 
     // The definition as JSON, in the names of the routes.
     private sealed record DefinitionJson(string Scope, string Category, string DisplayName, string[] Operations, string AssignsCompartment, bool AssignsPlatform, string[] AssignableRoles);
@@ -683,7 +683,7 @@ internal sealed class PendingActRepository(DbConnection connection, Func<DbTrans
     private const string Select = """
         select act_id as ActId, kind as Kind, subject as Subject, role as Role, compartment as Compartment, definition as Definition,
                proposed_at as ProposedAt, proposed_by as ProposedBy, expires_at as ExpiresAt, validated_at as ValidatedAt,
-               validated_by as ValidatedBy, rejected_at as RejectedAt, rejected_by as RejectedBy
+               validated_by as ValidatedBy, rejected_at as RejectedAt, rejected_by as RejectedBy, consumed_at as ConsumedAt
         from reg.pending_acts
         """;
 
@@ -721,11 +721,22 @@ internal sealed class PendingActRepository(DbConnection connection, Func<DbTrans
                 : "update reg.pending_acts set rejected_at = @at, rejected_by = @by where act_id = @id and validated_at is null and rejected_at is null",
             new { id, at = Names.Utc(closed.At), by = closed.By.Value }, transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false) == 1;
 
+    // One statement: the act is validated, for this person and this author, open and not spent — then spent.
+    public async Task<bool> ConsumeAsync(Guid id, string subject, string proposedBy, DateTimeOffset now, CancellationToken cancellationToken)
+        => await connection.ExecuteAsync(new CommandDefinition(
+            """
+            update reg.pending_acts set consumed_at = @now
+            where act_id = @id and kind = 'hand_delivery' and subject = @subject and proposed_by = @proposedBy
+              and validated_at is not null and consumed_at is null and expires_at > @now
+            """,
+            new { id, subject, proposedBy, now = Names.Utc(now) }, transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false) == 1;
+
     private static string KindOf(PendingActKind kind) => kind switch
     {
         PendingActKind.PlatformRole => "platform_role",
         PendingActKind.RoleDefinition => "role_definition",
         PendingActKind.OwnershipRescue => "ownership_rescue",
+        PendingActKind.HandDelivery => "hand_delivery",
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unknown act."),
     };
 
@@ -736,6 +747,7 @@ internal sealed class PendingActRepository(DbConnection connection, Func<DbTrans
             "platform_role" => PendingActKind.PlatformRole,
             "role_definition" => PendingActKind.RoleDefinition,
             "ownership_rescue" => PendingActKind.OwnershipRescue,
+            "hand_delivery" => PendingActKind.HandDelivery,
             _ => throw new InvalidOperationException($"reg.pending_acts holds the kind '{row.Kind}', which this package does not know."),
         };
         var json = row.Definition is null ? null : JsonSerializer.Deserialize<DefinitionJson>(row.Definition);
@@ -745,7 +757,8 @@ internal sealed class PendingActRepository(DbConnection connection, Func<DbTrans
                 new AssignableRoles(Names.SelectorOf(json.AssignsCompartment), json.AssignsPlatform, json.AssignableRoles)),
             new Stamp(Utc(row.ProposedAt), Actor.Parse(row.ProposedBy)), Utc(row.ExpiresAt),
             row.ValidatedAt is { } validated ? new Stamp(Utc(validated), Actor.Parse(row.ValidatedBy!)) : null,
-            row.RejectedAt is { } rejected ? new Stamp(Utc(rejected), Actor.Parse(row.RejectedBy!)) : null);
+            row.RejectedAt is { } rejected ? new Stamp(Utc(rejected), Actor.Parse(row.RejectedBy!)) : null,
+            row.ConsumedAt is { } consumed ? Utc(consumed) : null);
     }
 
     private static DefinitionJson ToJson(RoleScope scope, RoleDefinition definition)

@@ -249,6 +249,13 @@ act. Two channels validate one:
 The act is checked again when validated, and applied as if its author had done it then. Removing a platform role is
 immediate. The installation's acts wait for nothing.
 
+**A reset link handed over for an active account is such an act**, `hand_delivery`: in hand, the link gives its
+holder the account. `IValidations.ProposeHandDeliveryAsync(subject, actor)` proposes it — the actor must reach the
+person —; on screen, the validator must reach the person too; validated, it changes nothing here, and
+`TryConsumeHandDeliveryAsync(actId, subject, actor)` spends it once, for its person and its author, before it lapses.
+`Stellaegis.Identity` asks it through its port `IHandDeliveryApprovals`, which `Stellaegis.Registry.Identity`
+implements.
+
 ## Installing, then verifying
 
 `Stellaegis.Registry.PostgreSQL` and `Stellaegis.Registry.SqlServer` declare their database,

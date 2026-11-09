@@ -411,6 +411,24 @@ public abstract class RegistryStoreTests(IRegistryDatabaseFixture database) : IA
     private IPendingActStore Acts => Host.Services.GetRequiredService<IPendingActStore>();
 
     [Fact]
+    public async Task A_hand_delivery_is_spent_once_validated_by_its_author_for_its_person_before_it_lapses()
+    {
+        await SeedAsync();
+        var act = new PendingAct(Guid.NewGuid(), PendingActKind.HandDelivery, Jane, null, null, null, null, Granted, Now.AddDays(7));
+        await Acts.InsertAsync(act, Ct);
+        Assert.Equal((PendingActKind.HandDelivery, Jane), ((await Acts.GetAsync(act.ActId, Ct))!.Kind, (await Acts.GetAsync(act.ActId, Ct))!.Subject));
+
+        Assert.False(await Acts.TryConsumeAsync(act.ActId, Jane, By, Now.AddDays(1), Ct));   // not validated yet
+        Assert.True(await Acts.MarkValidatedAsync(act.ActId, new Stamp(Now, Actor.Parse("validator")), Ct));
+        Assert.False(await Acts.TryConsumeAsync(act.ActId, John, By, Now.AddDays(1), Ct));                     // another person
+        Assert.False(await Acts.TryConsumeAsync(act.ActId, Jane, Actor.Parse("other"), Now.AddDays(1), Ct));  // another author
+        Assert.False(await Acts.TryConsumeAsync(act.ActId, Jane, By, Now.AddDays(8), Ct));                     // lapsed
+        Assert.True(await Acts.TryConsumeAsync(act.ActId, Jane, By, Now.AddDays(1), Ct));
+        Assert.False(await Acts.TryConsumeAsync(act.ActId, Jane, By, Now.AddDays(1), Ct));                     // spent
+        Assert.NotNull((await Acts.GetAsync(act.ActId, Ct))!.ConsumedAt);
+    }
+
+    [Fact]
     public async Task An_act_waits_with_its_definition_and_closes_once_and_a_rescue_seats_another_owner_at_once()
     {
         await SeedAsync();
