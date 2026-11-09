@@ -5,7 +5,33 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [7.0.0] — 2026-11-09
+
+The gestures on a person, reviewed after a host had to open the administration of the accounts wide to let a manager
+invite a colleague. An operation names a gesture, never a write; a gesture on a person is decided on that person — by
+the rule A13 to A15 already applied to the roles, extended to whom holds them —; a reset link handed over for an
+active account waits for a second person; and the registry answers the ports of `Stellaegis.Identity` 9 through a
+package of composition, so that a manager invites without holding anything over the accounts.
+
+### Updating from 6.0.0
+
+1. **Install again.** The script `0002_reg.sql` adds `reg.pending_acts.consumed_at` and the constraints of the kinds
+   of acts, on both engines: the installation applies it, nothing is reinstalled. The verification at startup refuses
+   the application until it has. The same run records the catalogue, which retires the former `*.write` operations
+   of the modules it records, from the catalogue and from the roles that held them.
+2. **Give the roles the gestures.** A declared role names the new operations in its `RoleDeclaration`, and the
+   installation applies it again; a role created at runtime that held a `*.write` grants nothing by it any more, and
+   is defined again — `roles.define`, an act that waits for its validation. A policy, a test or a client that names
+   an operation by its string follows the renaming listed below.
+3. **Compose with Identity 9**, when the host holds the accounts: reference `Stellaegis.Registry.Identity` and call
+   `AddStellaegisRegistryIdentity()` after the accounts and the registry. Without it, Identity refuses a reset link
+   handed over for an active account and keeps the page `/invitation` closed. `AddStellaegisRegistryAdministration()`
+   registers the rule on a person: the routes of Identity that act on an account ask it, and refuse who cannot reach
+   the account.
+4. **Grant the managers the gestures they make**, not the administration of the accounts: inviting a colleague is
+   `invitations.send`, blocking one `users.block` of Identity, decided on the person.
+5. **A store of your own** implements `IPendingActStore.TryConsumeAsync` and `ICatalogStore.RetireAsync`, and keeps
+   `PendingAct.ConsumedAt` and the kind `hand_delivery`.
 
 ### Changed
 
