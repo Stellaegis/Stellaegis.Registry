@@ -36,6 +36,7 @@ using Stellaegis.Primitives.Data;
 using Stellaegis.Primitives.Hosting;
 using Stellaegis.Registry;
 using Stellaegis.Registry.AspNetCore;
+using Stellaegis.Registry.Identity;
 using Stellaegis.Registry.PostgreSQL;
 using Stellaegis.Registry.Sample;
 
@@ -85,7 +86,8 @@ builder.Services.AddStellaegisAccessPolicies();
 //    where the effective rights it computes go — the projection of Access, in process, through one adapter of five
 //    lines.
 builder.Services.AddStellaegisRegistryPostgreSQL(builder.Configuration);
-builder.Services.AddStellaegisRegistryAdministration();
+builder.Services.AddStellaegisRegistryAdministration();   // also the rule on a person: Identity's gestures on an account ask it
+builder.Services.AddStellaegisRegistryIdentity();         // the ports of the accounts answered by the registry: the second person, the invitations
 builder.Services.AddStellaegisRightsSink<AccessRightsSink>();
 
 // A policy scheme chooses who authenticates a request: a bearer token names the bearer, anything else the cookie —

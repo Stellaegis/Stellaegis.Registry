@@ -16,6 +16,7 @@
     <ProjectReference Include="..\..\src\Stellaegis.Registry\Stellaegis.Registry.csproj" />
     <ProjectReference Include="..\..\src\Stellaegis.Registry.PostgreSQL\Stellaegis.Registry.PostgreSQL.csproj" />
     <ProjectReference Include="..\..\src\Stellaegis.Registry.AspNetCore\Stellaegis.Registry.AspNetCore.csproj" />
+    <ProjectReference Include="..\..\src\Stellaegis.Registry.Identity\Stellaegis.Registry.Identity.csproj" />
     <!-- The rest of the base comes as packages: the registry references none of them, the host composes the four. -->
     <PackageReference Include="Stellaegis.Identity" />
     <PackageReference Include="Stellaegis.Identity.PostgreSQL" />

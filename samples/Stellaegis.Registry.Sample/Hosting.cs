@@ -42,9 +42,9 @@ public sealed class InventoryModule : IStellaegisModule
 public static class InventoryOperations
 {
     public static readonly Operation Read = new("items", "read", OperationKind.Read);
-    public static readonly Operation Write = new("items", "write", OperationKind.Write);
+    public static readonly Operation Add = new("items", "add", OperationKind.Write);   // a gesture, never a verb of the wire
     public static readonly Operation Purge = new("items", "purge", OperationKind.Delete);
-    public static IReadOnlyList<Operation> All { get; } = [Read, Write, Purge];
+    public static IReadOnlyList<Operation> All { get; } = [Read, Add, Purge];
 }
 
 /// <summary>
@@ -64,11 +64,11 @@ public static class SampleRoles
     public static IReadOnlyList<RoleDeclaration> Declarations(IEnumerable<ModuleDeclaration> modules) =>
     [
         new(RegistryRoles.Owner, RoleScope.Compartment, RoleCategory.Administration, "Propriétaire du compartiment",
-            [InventoryOperations.Read, InventoryOperations.Write]),
+            [InventoryOperations.Read, InventoryOperations.Add]),
         new(TenantAdministrator, RoleScope.Compartment, RoleCategory.Administration, "Administrateur du compartiment",
-            [InventoryOperations.Read, InventoryOperations.Write], AssignableRoles.Every(CompartmentRoleSelector.Business)),
+            [InventoryOperations.Read, InventoryOperations.Add], AssignableRoles.Every(CompartmentRoleSelector.Business)),
         new(ShopManager, RoleScope.Compartment, RoleCategory.Business, "Chef d'atelier",
-            [InventoryOperations.Read, InventoryOperations.Write], AssignableRoles.Of(Operator)),
+            [InventoryOperations.Read, InventoryOperations.Add], AssignableRoles.Of(Operator)),
         new(Operator, RoleScope.Compartment, RoleCategory.Business, "Opérateur", [InventoryOperations.Read]),
         new(SuperAdmin, RoleScope.Platform, RoleCategory.Administration, "Administrateur de la plateforme",
             modules.SelectMany(module => module.Operations).DistinctBy(operation => operation.Identity, StringComparer.Ordinal).ToList(),
@@ -127,7 +127,7 @@ public static class InventoryEndpoints
                 context.Space?.Compartment is { } compartment && !string.IsNullOrWhiteSpace(item?.Name)
                     ? Results.Created($"/api/items/{compartment.Value}", inventory.Add(compartment, item.Name, context.Actor))
                     : Results.BadRequest())
-            .WithMetadata(InventoryOperations.Write);
+            .WithMetadata(InventoryOperations.Add);
 
         return group;
     }
@@ -228,6 +228,24 @@ public sealed class LoggingMailer(ILogger<LoggingMailer> logger) : IIdentityMail
     public Task SendAccountAlreadyExistsAsync(string email, CancellationToken cancellationToken = default)
     {
         logger.LogWarning("MAIL to {Email}: someone tried to register this address, which has an account already", email);
+        return Task.CompletedTask;
+    }
+
+    public Task SendEmailChangedAsync(string previousEmail, string newEmail, Uri revertLink, TimeSpan lifetime, CancellationToken cancellationToken = default)
+    {
+        logger.LogWarning("MAIL to {Email}: your address became {NewEmail}; not you? undo it at {Link}, valid for {Lifetime}", previousEmail, newEmail, revertLink, lifetime);
+        return Task.CompletedTask;
+    }
+
+    public Task SendEmailChangeApprovalAsync(string previousEmail, string newEmail, Uri approvalLink, TimeSpan lifetime, CancellationToken cancellationToken = default)
+    {
+        logger.LogWarning("MAIL to {Email}: approve the change of your address to {NewEmail} at {Link}, valid for {Lifetime}", previousEmail, newEmail, approvalLink, lifetime);
+        return Task.CompletedTask;
+    }
+
+    public Task SendAccountLockedAsync(string email, DateTimeOffset until, CancellationToken cancellationToken = default)
+    {
+        logger.LogWarning("MAIL to {Email}: your account is locked after failed attempts, until {Until}", email, until);
         return Task.CompletedTask;
     }
 }
