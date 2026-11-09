@@ -102,6 +102,16 @@ public interface ICompartments
 /// </summary>
 public interface IUserDirectory
 {
+    /// <summary>
+    /// Whether <paramref name="actor"/> may act on the person <paramref name="subject"/> — a gesture that reaches them
+    /// whatever their rights: blocking their account, resetting their second factor, deactivating them. Never oneself
+    /// (<see cref="RegistryErrors.OwnRoles"/>), never the owner of a compartment (<see cref="RegistryErrors.OwnerUntouchable"/>),
+    /// and only a person every role of whom the actor could have assigned (<see cref="RegistryErrors.RoleNotAssignable"/>):
+    /// who may manage the colleagues does not thereby reach the administrator. A person who holds no role is reached.
+    /// <c>Stellaegis.Registry.AspNetCore</c> answers the resource-based authorization of a <c>Subject</c> with it.
+    /// </summary>
+    Task<Result> ReachesAsync(string subject, Actor actor, CancellationToken cancellationToken = default);
+
     /// <summary>Records the user, active, or updates their e-mail and display name.</summary>
     Task<Result<UserRecord>> RecordAsync(string subject, string email, string displayName, Actor actor, CancellationToken cancellationToken = default);
 
@@ -583,10 +593,20 @@ internal sealed class Compartments(
 
 internal sealed class UserDirectory(
     IUserStore store,
+    AssignmentRules rules,
     RightsProjector projector,
     IEventPublisher publisher,
     TimeProvider time) : IUserDirectory
 {
+    public async Task<Result> ReachesAsync(string subject, Actor actor, CancellationToken cancellationToken = default)
+    {
+        subject = RegistryRules.NormalizeSubject(subject);
+        Guard.NotNull(actor);
+        return await rules.ReachesAsync(actor, subject, cancellationToken).ConfigureAwait(false) is { } refused
+            ? Result.Failure(refused)
+            : Result.Success();
+    }
+
     public async Task<Result<UserRecord>> RecordAsync(string subject, string email, string displayName, Actor actor, CancellationToken cancellationToken = default)
     {
         subject = RegistryRules.NormalizeSubject(subject);
@@ -924,6 +944,35 @@ internal sealed class AssignmentRules(IRoleStore roles, IMembershipStore members
         var all = (await roles.ListAsync(cancellationToken: cancellationToken).ConfigureAwait(false)).ToDictionary(role => role.Name, StringComparer.Ordinal);
         return (await operators.ListRolesAsync(RegistryRules.NormalizeSubject(actor.Value), cancellationToken).ConfigureAwait(false))
             .Any(name => all.TryGetValue(name, out var role) && role.Assignable.Compartment == CompartmentRoleSelector.All);
+    }
+
+    /// <summary>
+    /// The refusal when the actor may not act on the person <paramref name="subject"/> — block them, reset their second
+    /// factor, deactivate them —; <see langword="null"/> otherwise. A13 to A15, from the role to whom holds it: never
+    /// oneself, never the owner of a compartment, and only a person every role of whom the actor could have assigned —
+    /// their platform roles on the platform, their compartment roles in each compartment. A person who holds no role is
+    /// reached: there is nothing to protect. The installation reaches everyone.
+    /// </summary>
+    public async Task<Error?> ReachesAsync(Actor actor, string subject, CancellationToken cancellationToken)
+    {
+        if (IsJob(actor))
+            return null;
+        if (Own(subject, actor) is { } own)
+            return own;
+        if ((await compartments.ListAsync(cancellationToken).ConfigureAwait(false)).FirstOrDefault(c => c.Owner == subject) is { } owned)
+            return RegistryErrors.OwnerUntouchable(subject, owned.Compartment);
+
+        var all = (await roles.ListAsync(cancellationToken: cancellationToken).ConfigureAwait(false)).ToDictionary(role => role.Name, StringComparer.Ordinal);
+        var platform = await operators.ListRolesAsync(subject, cancellationToken).ConfigureAwait(false);
+        if (platform.Count > 0 && Covers(await HeldAsync(actor, null, all, cancellationToken).ConfigureAwait(false), all, platform) is { } beyondPlatform)
+            return beyondPlatform;
+        foreach (var membership in await memberships.ListByUserAsync(subject, cancellationToken).ConfigureAwait(false))
+        {
+            if (membership.Roles.Count > 0
+                && Covers(await HeldAsync(actor, membership.Compartment, all, cancellationToken).ConfigureAwait(false), all, membership.Roles) is { } beyond)
+                return beyond;
+        }
+        return null;
     }
 
     /// <summary>Whether the actor holds <paramref name="operation"/> by one of their roles, on the platform or in <paramref name="compartment"/>.</summary>

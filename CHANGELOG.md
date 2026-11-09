@@ -19,6 +19,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Recording the catalogue retires what a module recorded no longer declares**, from the catalogue and from the
   roles that held it, whose holders are projected again. It removed nothing: an operation renamed stayed, granting
   nothing. Only the modules recorded are read, another host's left alone. `ICatalogStore.RetireAsync`.
+- **A gesture on a person reaches whom the actor could have assigned every role**, never oneself, never the owner of a
+  compartment: `IUserDirectory.ReachesAsync`, which `AddStellaegisRegistryAdministration()` registers as the
+  resource-based authorization of a `Subject` — the deactivation of the directory asks it, and the routes of
+  `Stellaegis.Identity` 9 that act on an account. A refusal fails the requirement, whatever another handler says.
+  `POST users/{subject}/deactivate` and `…/reactivate` load the person; who may deactivate a colleague no longer
+  deactivates the administrator.
+- **Stellaegis.Primitives 5.5.0**, for `Subject`; Microsoft.Extensions 10.0.14.
 
 
 ## [6.0.0] — 2026-10-23

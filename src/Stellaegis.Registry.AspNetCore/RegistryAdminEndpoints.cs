@@ -1,7 +1,9 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using Stellaegis.Primitives;
 using Stellaegis.Primitives.AspNetCore;
@@ -19,8 +21,10 @@ namespace Stellaegis.Registry.AspNetCore;
 /// context, the actor of a write is read from the principal the host authenticated — the registry keeps it on
 /// the row it writes, and the host's journal gets it too —, and the host's rights system
 /// decides them in the shared space — an operator of the platform who is also a member of a compartment is, in
-/// that compartment, in the situation of any member. A compartment, a user or a role is nobody's resource, so
-/// the routes declare they load none: the operation each is labelled with is the whole decision.
+/// that compartment, in the situation of any member. A compartment or a role is nobody's resource, so their routes
+/// declare they load none: the operation each is labelled with, and the rules of the registry, decide. A person is
+/// one: deactivating someone in the directory is decided on that person too, by the rule
+/// <see cref="AddStellaegisRegistryAdministration"/> registers.
 /// </para>
 /// <list type="bullet">
 ///   <item><c>GET registry/compartments</c>, <c>GET registry/compartments/{compartment}</c> — <c>compartments.read</c></item>
@@ -63,11 +67,15 @@ public static class RegistryAdminEndpoints
     /// <summary>
     /// Registers the startup check of the routes, which <see cref="MapRegistryAdminEndpoints"/> needs: a module
     /// without compartments registers it from its own registration, since no request context does. Harmless when
-    /// something else registered it.
+    /// something else registered it. Registers too the rule of the registry on a gesture that reaches a person — the
+    /// resource-based authorization of a <c>Subject</c> —, which the deactivation of the directory asks, and the routes
+    /// of <c>Stellaegis.Identity</c> that act on an account: a person is reached only by who could have assigned them
+    /// every role they hold (<see cref="IUserDirectory.ReachesAsync"/>).
     /// </summary>
     public static IServiceCollection AddStellaegisRegistryAdministration(this IServiceCollection services)
     {
         Guard.NotNull(services);
+        services.TryAddEnumerable(ServiceDescriptor.Scoped<IAuthorizationHandler, PersonRule>());
         return services.AddStellaegisStartupCheck();
     }
 
@@ -82,16 +90,17 @@ public static class RegistryAdminEndpoints
         Guard.NotNull(endpoints);
         var group = endpoints.MapGroup("registry")
             .BelongsTo<RegistryModule>()
-            .LoadsNoResource()
             .AddErrorTranslation();
 
-        MapCompartments(group.MapGroup("/compartments"));
+        // A compartment, a role, a membership is nobody's resource: their routes load none, the operation and the
+        // rules of the registry decide. A person is one: the deactivation of the directory loads the person it reaches.
+        MapCompartments(group.MapGroup("/compartments").LoadsNoResource());
         MapUsers(group.MapGroup("/users"));
-        MapCatalog(group.MapGroup("/catalog"));
-        MapRoles(group.MapGroup("/roles"));
-        MapMemberships(group.MapGroup("/memberships"));
-        MapOperators(group.MapGroup("/operators"));
-        MapValidations(group.MapGroup("/validations"));
+        MapCatalog(group.MapGroup("/catalog").LoadsNoResource());
+        MapRoles(group.MapGroup("/roles").LoadsNoResource());
+        MapMemberships(group.MapGroup("/memberships").LoadsNoResource());
+        MapOperators(group.MapGroup("/operators").LoadsNoResource());
+        MapValidations(group.MapGroup("/validations").LoadsNoResource());
         return group;
     }
 
@@ -278,6 +287,7 @@ public static class RegistryAdminEndpoints
         users.MapGet("/", async (IUserDirectory directory, CancellationToken ct) =>
                 Results.Ok((await directory.ListAsync(ct)).Select(UserSummary.Of).ToArray()))
             .WithMetadata(RegistryOperations.DirectoryRead)
+            .LoadsNoResource()
             .Produces<UserSummary[]>(StatusCodes.Status200OK);
 
         users.MapGet("/{subject}", async (string subject, IUserDirectory directory, CancellationToken ct) =>
@@ -285,6 +295,7 @@ public static class RegistryAdminEndpoints
                     ? Summary(await directory.GetAsync(subject, ct), UserSummary.Of)
                     : NotASubject(subject))
             .WithMetadata(RegistryOperations.DirectoryRead)
+            .LoadsNoResource()   // reading takes nothing from the person
             .Produces<UserSummary>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status404NotFound);
 
@@ -296,6 +307,7 @@ public static class RegistryAdminEndpoints
                 return Summary(await directory.DeactivateAsync(subject, Callers.ActorOf(http), ct), UserSummary.Of);
             })
             .WithMetadata(RegistryOperations.DirectoryDeactivate)
+            .ActsOnPerson()
             .Produces<UserSummary>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status404NotFound);
 
@@ -307,6 +319,7 @@ public static class RegistryAdminEndpoints
                 return Summary(await directory.ReactivateAsync(subject, Callers.ActorOf(http), ct), UserSummary.Of);
             })
             .WithMetadata(RegistryOperations.DirectoryDeactivate)
+            .ActsOnPerson()
             .Produces<UserSummary>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status404NotFound);
     }

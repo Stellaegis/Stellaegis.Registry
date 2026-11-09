@@ -14,6 +14,19 @@ internal static class Callers
 {
     private static readonly string[] ActorClaims = [ClaimTypes.NameIdentifier, "sub", "client_id"];
 
+    /// <summary>The actor an authenticated principal names, or <see langword="null"/> — nobody authenticated, or no claim that is an actor.</summary>
+    public static Actor? ActorOf(ClaimsPrincipal user)
+    {
+        if (user.Identity?.IsAuthenticated != true)
+            return null;
+        foreach (var type in ActorClaims)
+        {
+            if (user.FindFirst(type)?.Value is { } value)
+                return Actor.TryParse(value, out var actor) ? actor : null;
+        }
+        return null;
+    }
+
     /// <summary>The actor of the request, never <see langword="null"/>.</summary>
     /// <exception cref="InvalidOperationException">An authenticated principal carries none of the claims, or a value that is not an actor.</exception>
     public static Actor ActorOf(HttpContext httpContext)

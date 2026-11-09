@@ -196,6 +196,20 @@ the lists of the roles they hold cover — in the compartment for a compartment 
 role —, never to themselves, and never changes the definition of a role they hold. The installation, a job, is
 bounded by none of this.
 
+### Who reaches whom
+
+A gesture can reach a person without touching a role: blocking their account, removing their second factor,
+deactivating them in the directory. Bounding the roles alone would leave the person who holds them open — who may
+manage the colleagues would block the administrator, or take their account. So the same lists bound the person: an
+actor reaches a person only if they could have assigned them every role they hold — their platform roles on the
+platform, their compartment roles in each compartment —, never themselves, never the owner of a compartment, the
+platform included. A person who holds no role is reached: there is nothing to protect.
+
+`IUserDirectory.ReachesAsync(subject, actor)` answers it. `AddStellaegisRegistryAdministration()` registers it as the
+resource-based authorization of a `Subject` of `Stellaegis.Primitives`: the deactivation of the directory asks it, and
+so do the routes of `Stellaegis.Identity` that act on an account, in the same host. A refusal fails the requirement:
+another handler of the host that would let every person through does not outweigh it.
+
 ### The owner
 
 A compartment has at most one owner, its legal holder, carried by the compartment. The owner is its first member
