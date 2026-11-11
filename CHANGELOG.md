@@ -5,6 +5,26 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [7.1.1] — 2026-11-11
+
+The stores talk to their engine through its provider, and the adapters no longer reference Dapper. What the packages
+do is unchanged.
+
+### Changed
+
+- **`Stellaegis.Registry.PostgreSQL` and `Stellaegis.Registry.SqlServer` no longer reference Dapper.** Their
+  repositories run `NpgsqlCommand` and `SqlCommand`, each parameter under its declared type, each row read by the
+  names of its columns. Dapper still comes with `Stellaegis.Primitives.Data` 5.x, which both adapters reference.
+- **On SQL Server, a list of operations is one parameter, read by `string_split`**, where Dapper wrote one parameter
+  per operation: the statement keeps one plan whatever the length of the list. `string_split` asks for a database at
+  compatibility level 130 or above.
+- **`Stellaegis.Registry.Identity` on `Stellaegis.Identity` 9.0.2.** The example runs on it and on
+  `Stellaegis.Access` 6.1.1.
+
+### Updating from 7.1.0
+
+Take the version: a host has nothing to change.
+
 ## [7.1.0] — 2026-11-09
 
 On `Stellaegis.Primitives` 5.6.0, and a token naming a job is never the installation.

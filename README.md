@@ -26,7 +26,7 @@ The library targets .NET 10 and is released under the MIT license.
 | `Stellaegis.Registry.AspNetCore` | The administration routes, each under its operation, decided in the shared space; the invitation routes; the rule on a person, the authorization of a `Subject` | `Stellaegis.Primitives.AspNetCore`, ASP.NET Core |
 | `Stellaegis.Registry.Identity` | The registry and `Stellaegis.Identity` composed: the ports of the accounts answered by the registry — the second person who approves a reset link handed over, the invitation an account accepts | `Stellaegis.Registry`, `Stellaegis.Identity` |
 
-The packages share one version. They started at the major version of Stellaegis.Primitives, 5; 7.1.0 runs on
+The packages share one version. They started at the major version of Stellaegis.Primitives, 5; 7.1.1 runs on
 Primitives 5.6.0. `Stellaegis.Registry.Identity` is the one package that depends on another module of the family: a
 package of composition, the one place the registry and the accounts meet, so that no host copies the bridge.
 
