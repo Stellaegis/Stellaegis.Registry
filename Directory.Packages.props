@@ -10,17 +10,17 @@
     <PackageVersion Include="Stellaegis.Primitives.AspNetCore" Version="5.6.0" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.14" />
     <!-- The rest of the base, for the example host under samples/; the registry references none of them, the composition package Stellaegis.Identity alone -->
-    <PackageVersion Include="Stellaegis.Identity" Version="9.0.1" />
-    <PackageVersion Include="Stellaegis.Identity.PostgreSQL" Version="9.0.1" />
-    <PackageVersion Include="Stellaegis.Identity.AspNetCore" Version="9.0.1" />
-    <PackageVersion Include="Stellaegis.Identity.Server" Version="9.0.1" />
+    <PackageVersion Include="Stellaegis.Identity" Version="9.0.2" />
+    <PackageVersion Include="Stellaegis.Identity.PostgreSQL" Version="9.0.2" />
+    <PackageVersion Include="Stellaegis.Identity.AspNetCore" Version="9.0.2" />
+    <PackageVersion Include="Stellaegis.Identity.Server" Version="9.0.2" />
     <PackageVersion Include="Stellaegis.Issuer" Version="5.4.1" />
     <PackageVersion Include="Stellaegis.Issuer.PostgreSQL" Version="5.4.1" />
     <PackageVersion Include="Stellaegis.Issuer.Client" Version="5.4.1" />
     <PackageVersion Include="Stellaegis.Issuer.Server" Version="5.4.1" />
-    <PackageVersion Include="Stellaegis.Access" Version="6.1.0" />
-    <PackageVersion Include="Stellaegis.Access.PostgreSQL" Version="6.1.0" />
-    <PackageVersion Include="Stellaegis.Access.AspNetCore" Version="6.1.0" />
+    <PackageVersion Include="Stellaegis.Access" Version="6.1.1" />
+    <PackageVersion Include="Stellaegis.Access.PostgreSQL" Version="6.1.1" />
+    <PackageVersion Include="Stellaegis.Access.AspNetCore" Version="6.1.1" />
     <!-- PostgreSQL -->
     <PackageVersion Include="Npgsql" Version="10.0.3" />
     <!-- SQL Server -->
