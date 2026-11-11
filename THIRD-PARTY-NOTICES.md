@@ -10,7 +10,6 @@ alongside them, each under its own license.
 | Stellaegis.Primitives, and Stellaegis.Primitives.Hosting | all packages | MIT | <https://github.com/Stellaegis/Stellaegis.Primitives> |
 | Stellaegis.Primitives.Data | `Stellaegis.Registry.PostgreSQL`, `Stellaegis.Registry.SqlServer` | MIT | <https://github.com/Stellaegis/Stellaegis.Primitives> |
 | Stellaegis.Primitives.AspNetCore | `Stellaegis.Registry.AspNetCore` | MIT | <https://github.com/Stellaegis/Stellaegis.Primitives> |
-| Dapper | `Stellaegis.Registry.PostgreSQL`, `Stellaegis.Registry.SqlServer` | Apache-2.0 | <https://github.com/DapperLib/Dapper> |
 | Npgsql | `Stellaegis.Registry.PostgreSQL` | PostgreSQL | <https://github.com/npgsql/npgsql> |
 | Microsoft.Data.SqlClient | `Stellaegis.Registry.SqlServer` | MIT | <https://github.com/dotnet/SqlClient> |
 | System.Security.Cryptography.Pkcs | `Stellaegis.Registry.SqlServer` (pinned above the version Microsoft.Data.SqlClient pulls in) | MIT | <https://github.com/dotnet/runtime> |

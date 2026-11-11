@@ -465,7 +465,9 @@ public abstract class RegistryStoreTests(IRegistryDatabaseFixture database) : IA
     public async Task The_catalogue_keeps_what_a_module_declares_sensitive_and_what_the_installation_hardened()
     {
         await Catalog.SaveAsync([new CatalogEntry("payroll", "payroll.pay", OperationKind.Write, DeclaredSecondFactor: true), new CatalogEntry("payroll", "payroll.read", OperationKind.Read)], Ct);
-        await Catalog.HardenAsync(["payroll.read"], Ct);
+        // A list written out longer than the 4000 characters of a string parameter: its last operation is not cut.
+        string[] many = [.. Enumerable.Range(0, 300).Select(i => $"module{i:000}.operation_{i:000}"), "payroll.read"];
+        await Catalog.HardenAsync(many, Ct);
         await Catalog.SaveAsync([new CatalogEntry("payroll", "payroll.read", OperationKind.Read)], Ct);   // a new recording unsets nothing
 
         var entries = (await Catalog.ListAsync(Ct)).Where(entry => entry.Module == "payroll").ToDictionary(entry => entry.Operation);

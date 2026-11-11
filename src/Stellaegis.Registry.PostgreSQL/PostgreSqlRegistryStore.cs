@@ -28,14 +28,14 @@ internal sealed class PostgreSqlRegistryStore
             throw new InvalidOperationException($"{nameof(RegistryDatabaseOptions)}: {error}");
 
         var registry = new RepositoryRegistry<RegistryDatabase>()
-            .Add<CompartmentRepository>((connection, transaction) => new CompartmentRepository(connection, transaction))
-            .Add<UserRepository>((connection, transaction) => new UserRepository(connection, transaction))
-            .Add<CatalogRepository>((connection, transaction) => new CatalogRepository(connection, transaction))
-            .Add<RoleRepository>((connection, transaction) => new RoleRepository(connection, transaction))
-            .Add<MembershipRepository>((connection, transaction) => new MembershipRepository(connection, transaction))
-            .Add<OperatorRepository>((connection, transaction) => new OperatorRepository(connection, transaction))
-            .Add<InvitationRepository>((connection, transaction) => new InvitationRepository(connection, transaction))
-            .Add<PendingActRepository>((connection, transaction) => new PendingActRepository(connection, transaction));
+            .Add<CompartmentRepository>((connection, transaction) => new CompartmentRepository((NpgsqlConnection)connection, () => (NpgsqlTransaction?)transaction()))
+            .Add<UserRepository>((connection, transaction) => new UserRepository((NpgsqlConnection)connection, () => (NpgsqlTransaction?)transaction()))
+            .Add<CatalogRepository>((connection, transaction) => new CatalogRepository((NpgsqlConnection)connection, () => (NpgsqlTransaction?)transaction()))
+            .Add<RoleRepository>((connection, transaction) => new RoleRepository((NpgsqlConnection)connection, () => (NpgsqlTransaction?)transaction()))
+            .Add<MembershipRepository>((connection, transaction) => new MembershipRepository((NpgsqlConnection)connection, () => (NpgsqlTransaction?)transaction()))
+            .Add<OperatorRepository>((connection, transaction) => new OperatorRepository((NpgsqlConnection)connection, () => (NpgsqlTransaction?)transaction()))
+            .Add<InvitationRepository>((connection, transaction) => new InvitationRepository((NpgsqlConnection)connection, () => (NpgsqlTransaction?)transaction()))
+            .Add<PendingActRepository>((connection, transaction) => new PendingActRepository((NpgsqlConnection)connection, () => (NpgsqlTransaction?)transaction()));
 
         _dataSource = NpgsqlDataSource.Create(value.ConnectionString);
         _units = new AdoUnitOfWorkFactory<RegistryDatabase>(_dataSource, registry);
@@ -216,20 +216,20 @@ internal sealed class PostgreSqlRegistryStore
     async Task<Invitation?> IInvitationStore.GetAsync(Guid invitationId, CancellationToken cancellationToken)
     {
         await using var uow = await _units.OpenAsync(cancellationToken).ConfigureAwait(false);
-        return (await uow.Repo<InvitationRepository>().ListAsync("i.invitation_id = @invitationId", new { invitationId }, cancellationToken).ConfigureAwait(false)).SingleOrDefault();
+        return await uow.Repo<InvitationRepository>().FindAsync(invitationId, cancellationToken).ConfigureAwait(false);
     }
 
     async Task<Invitation?> IInvitationStore.GetByHashAsync(string tokenHash, CancellationToken cancellationToken)
     {
         await using var uow = await _units.OpenAsync(cancellationToken).ConfigureAwait(false);
-        return (await uow.Repo<InvitationRepository>().ListAsync("i.token_hash = @tokenHash", new { tokenHash }, cancellationToken).ConfigureAwait(false)).SingleOrDefault();
+        return await uow.Repo<InvitationRepository>().FindByTokenHashAsync(tokenHash, cancellationToken).ConfigureAwait(false);
     }
 
     async Task<IReadOnlyList<Invitation>> IInvitationStore.ListByCompartmentAsync(Compartment compartment, CancellationToken cancellationToken)
     {
         Guard.NotNull(compartment);
         await using var uow = await _units.OpenAsync(cancellationToken).ConfigureAwait(false);
-        return await uow.Repo<InvitationRepository>().ListAsync("i.compartment = @compartment", new { compartment = compartment.Value }, cancellationToken).ConfigureAwait(false);
+        return await uow.Repo<InvitationRepository>().ListByCompartmentAsync(compartment.Value, cancellationToken).ConfigureAwait(false);
     }
 
     async Task<bool> IInvitationStore.RevokeAsync(Guid invitationId, Stamp revoked, CancellationToken cancellationToken)

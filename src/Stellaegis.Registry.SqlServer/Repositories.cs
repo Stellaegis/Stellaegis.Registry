@@ -1,6 +1,6 @@
+using System.Data;
 using System.Text.Json;
-using System.Data.Common;
-using Dapper;
+using Microsoft.Data.SqlClient;
 using Stellaegis.Primitives;
 
 namespace Stellaegis.Registry.SqlServer;
@@ -105,40 +105,59 @@ internal static class Names
     public static DateTimeOffset At(DateTimeOffset at) => at;
 
     /// <summary>The trace of a row, from its four audit columns.</summary>
-    public static Audit AuditOf(DateTimeOffset createdAt, string createdBy, DateTimeOffset modifiedAt, string modifiedBy)
-        => new(new Stamp(At(createdAt), Actor.Parse(createdBy)), new Stamp(At(modifiedAt), Actor.Parse(modifiedBy)));
+    public static Audit AuditOf(SqlDataReader row) => new(
+        new Stamp(At(row.GetFieldValue<DateTimeOffset>("created_at")), Actor.Parse(row.GetString("created_by"))),
+        new Stamp(At(row.GetFieldValue<DateTimeOffset>("modified_at")), Actor.Parse(row.GetString("modified_by"))));
 }
 
-/// <summary>The rows of <c>reg.compartments</c>, read and written on the connection of a unit of work.</summary>
-internal sealed class CompartmentRepository(DbConnection connection, Func<DbTransaction?> transaction)
+/// <summary>The sizes the parameters of the statements are declared with.</summary>
+internal static class Sizes
 {
-    private sealed record Row(string Compartment, string DisplayName, string Status, DateTimeOffset CreatedAt, string CreatedBy, DateTimeOffset ModifiedAt, string ModifiedBy, string? Owner);
+    /// <summary>
+    /// The size of a string parameter for a column <c>nvarchar(n)</c> or <c>nchar(n)</c>: the largest n there is. A
+    /// size taken from the column would cut a longer value without an error, and the statement would then compare
+    /// or store what is left of it; a size taken from each value gives SQL Server one plan per length.
+    /// </summary>
+    public const int Text = 4000;
 
-    private sealed record TransferRow(string Compartment, string From, string To, DateTimeOffset ProposedAt, string ProposedBy, DateTimeOffset ExpiresAt, string? Kept);
+    /// <summary>
+    /// The size of a parameter that may hold more than <see cref="Text"/> allows: the definition of a role, a list
+    /// of operations. Under <see cref="Text"/>, the driver would cut it.
+    /// </summary>
+    public const int Max = -1;
+}
 
+
+/// <summary>The rows of <c>reg.compartments</c>, read and written on the connection of a unit of work.</summary>
+internal sealed class CompartmentRepository(SqlConnection connection, Func<SqlTransaction?> transaction)
+{
     private const string Columns = "compartment, display_name, status, created_at, created_by, modified_at, modified_by";
-
-    // Dapper matches a positional record by the names of its parameters: the columns are read under those names.
-    private const string Selected = "compartment as Compartment, display_name as DisplayName, status as Status, created_at as CreatedAt, created_by as CreatedBy, modified_at as ModifiedAt, modified_by as ModifiedBy, owner_subject as Owner";
 
     public async Task<CompartmentRecord?> GetAsync(string compartment, CancellationToken cancellationToken)
     {
-        var row = await connection.QuerySingleOrDefaultAsync<Row>(new CommandDefinition(
-            $"select {Selected} from reg.compartments where compartment = @compartment",
-            new { compartment }, transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false);
-        return row is null ? null : ToRecord(row);
+        await using var command = new SqlCommand(
+            $"select {Columns}, owner_subject from reg.compartments where compartment = @compartment",
+            connection, transaction());
+        command.Parameters.Add("@compartment", SqlDbType.NVarChar, Sizes.Text).Value = compartment;
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        return await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ? Read(reader) : null;
     }
 
     public async Task<IReadOnlyList<CompartmentRecord>> ListAsync(CancellationToken cancellationToken)
     {
-        var rows = await connection.QueryAsync<Row>(new CommandDefinition(
-            $"select {Selected} from reg.compartments order by compartment",
-            transaction: transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false);
-        return rows.Select(ToRecord).ToList();
+        await using var command = new SqlCommand(
+            $"select {Columns}, owner_subject from reg.compartments order by compartment",
+            connection, transaction());
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        var compartments = new List<CompartmentRecord>();
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            compartments.Add(Read(reader));
+        return compartments;
     }
 
-    public Task UpsertAsync(CompartmentRecord compartment, CancellationToken cancellationToken)
-        => connection.ExecuteAsync(new CommandDefinition(
+    public async Task UpsertAsync(CompartmentRecord compartment, CancellationToken cancellationToken)
+    {
+        await using var command = new SqlCommand(
             $"""
             begin try
                 update reg.compartments set display_name = @displayName, status = @status, modified_at = @modifiedAt, modified_by = @modifiedBy where compartment = @compartment;
@@ -150,136 +169,186 @@ internal sealed class CompartmentRepository(DbConnection connection, Func<DbTran
                 update reg.compartments set display_name = @displayName, status = @status, modified_at = @modifiedAt, modified_by = @modifiedBy where compartment = @compartment;
             end catch
             """,
-            new
-            {
-                compartment = compartment.Compartment.Value,
-                displayName = compartment.DisplayName,
-                status = Names.Of(compartment.Status),
-                createdAt = Names.Utc(compartment.Audit.Created.At),
-                createdBy = compartment.Audit.Created.By.Value,
-                modifiedAt = Names.Utc(compartment.Audit.Modified.At),
-                modifiedBy = compartment.Audit.Modified.By.Value,
-            }, transaction(), cancellationToken: cancellationToken));
+            connection, transaction());
+        command.Parameters.Add("@compartment", SqlDbType.NVarChar, Sizes.Text).Value = compartment.Compartment.Value;
+        command.Parameters.Add("@displayName", SqlDbType.NVarChar, Sizes.Text).Value = compartment.DisplayName;
+        command.Parameters.Add("@status", SqlDbType.NVarChar, Sizes.Text).Value = Names.Of(compartment.Status);
+        command.Parameters.Add("@createdAt", SqlDbType.DateTimeOffset).Value = Names.Utc(compartment.Audit.Created.At);
+        command.Parameters.Add("@createdBy", SqlDbType.NVarChar, Sizes.Text).Value = compartment.Audit.Created.By.Value;
+        command.Parameters.Add("@modifiedAt", SqlDbType.DateTimeOffset).Value = Names.Utc(compartment.Audit.Modified.At);
+        command.Parameters.Add("@modifiedBy", SqlDbType.NVarChar, Sizes.Text).Value = compartment.Audit.Modified.By.Value;
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
 
     /// <summary>Seats the owner when there is none; whether it was seated.</summary>
     public async Task<bool> SetOwnerIfNoneAsync(string compartment, string owner, CancellationToken cancellationToken)
-        => await connection.ExecuteAsync(new CommandDefinition(
+    {
+        await using var command = new SqlCommand(
             "update reg.compartments set owner_subject = @owner where compartment = @compartment and owner_subject is null",
-            new { compartment, owner }, transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false) == 1;
+            connection, transaction());
+        command.Parameters.Add("@compartment", SqlDbType.NVarChar, Sizes.Text).Value = compartment;
+        command.Parameters.Add("@owner", SqlDbType.NVarChar, Sizes.Text).Value = owner;
+        return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) == 1;
+    }
 
     /// <summary>Replaces the owner when it is still <paramref name="from"/>; whether it was replaced.</summary>
     public async Task<bool> ReplaceOwnerAsync(string compartment, string from, string to, CancellationToken cancellationToken)
-        => await connection.ExecuteAsync(new CommandDefinition(
+    {
+        await using var command = new SqlCommand(
             "update reg.compartments set owner_subject = @to where compartment = @compartment and owner_subject = @from",
-            new { compartment, from, to }, transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false) == 1;
+            connection, transaction());
+        command.Parameters.Add("@compartment", SqlDbType.NVarChar, Sizes.Text).Value = compartment;
+        command.Parameters.Add("@from", SqlDbType.NVarChar, Sizes.Text).Value = from;
+        command.Parameters.Add("@to", SqlDbType.NVarChar, Sizes.Text).Value = to;
+        return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) == 1;
+    }
 
+    // One row per role kept, or one row without a role: the transfer is read from the first, the roles from each.
     public async Task<OwnershipTransfer?> GetTransferAsync(string compartment, CancellationToken cancellationToken)
     {
-        var rows = (await connection.QueryAsync<TransferRow>(new CommandDefinition(
+        await using var command = new SqlCommand(
             """
-            select t.compartment as Compartment, t.from_subject as [From], t.to_subject as [To], t.proposed_at as ProposedAt,
-                   t.proposed_by as ProposedBy, t.expires_at as ExpiresAt, k.role as Kept
+            select t.compartment, t.from_subject, t.to_subject, t.proposed_at, t.proposed_by, t.expires_at, k.role
             from reg.ownership_transfers t
             left join reg.ownership_transfer_kept_roles k on k.compartment = t.compartment
             where t.compartment = @compartment
             order by k.role
             """,
-            new { compartment }, transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false)).ToList();
-        if (rows.Count == 0)
-            return null;
-        var first = rows[0];
-        return new OwnershipTransfer(Compartment.Parse(first.Compartment), first.From, first.To,
-            rows.Where(row => row.Kept is not null).Select(row => row.Kept!).ToList(),
-            new Stamp(first.ProposedAt, Actor.Parse(first.ProposedBy)),
-            first.ExpiresAt);
+            connection, transaction());
+        command.Parameters.Add("@compartment", SqlDbType.NVarChar, Sizes.Text).Value = compartment;
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        (string Compartment, string From, string To, DateTimeOffset ProposedAt, string ProposedBy, DateTimeOffset ExpiresAt)? transfer = null;
+        var kept = new List<string>();
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            transfer ??= (reader.GetString("compartment"), reader.GetString("from_subject"), reader.GetString("to_subject"),
+                reader.GetFieldValue<DateTimeOffset>("proposed_at"), reader.GetString("proposed_by"), reader.GetFieldValue<DateTimeOffset>("expires_at"));
+            if (!reader.IsDBNull("role"))
+                kept.Add(reader.GetString("role"));
+        }
+        return transfer is { } first
+            ? new OwnershipTransfer(Compartment.Parse(first.Compartment), first.From, first.To, kept,
+                new Stamp(first.ProposedAt, Actor.Parse(first.ProposedBy)), first.ExpiresAt)
+            : null;
     }
 
     public async Task SaveTransferAsync(OwnershipTransfer transfer, CancellationToken cancellationToken)
     {
         await DeleteTransferAsync(transfer.Compartment.Value, cancellationToken).ConfigureAwait(false);
-        await connection.ExecuteAsync(new CommandDefinition(
+        await using (var command = new SqlCommand(
             """
             insert into reg.ownership_transfers (compartment, from_subject, to_subject, proposed_at, proposed_by, expires_at)
             values (@compartment, @from, @to, @proposedAt, @proposedBy, @expiresAt)
             """,
-            new
-            {
-                compartment = transfer.Compartment.Value,
-                from = transfer.From,
-                to = transfer.To,
-                proposedAt = Names.Utc(transfer.Proposed.At),
-                proposedBy = transfer.Proposed.By.Value,
-                expiresAt = Names.Utc(transfer.ExpiresAt),
-            }, transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false);
-        if (transfer.Kept.Count > 0)
-            await connection.ExecuteAsync(new CommandDefinition(
-                "insert into reg.ownership_transfer_kept_roles (compartment, role) values (@compartment, @role)",
-                transfer.Kept.Distinct(StringComparer.Ordinal).Select(role => new { compartment = transfer.Compartment.Value, role }).ToList(),
-                transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false);
+            connection, transaction()))
+        {
+            command.Parameters.Add("@compartment", SqlDbType.NVarChar, Sizes.Text).Value = transfer.Compartment.Value;
+            command.Parameters.Add("@from", SqlDbType.NVarChar, Sizes.Text).Value = transfer.From;
+            command.Parameters.Add("@to", SqlDbType.NVarChar, Sizes.Text).Value = transfer.To;
+            command.Parameters.Add("@proposedAt", SqlDbType.DateTimeOffset).Value = Names.Utc(transfer.Proposed.At);
+            command.Parameters.Add("@proposedBy", SqlDbType.NVarChar, Sizes.Text).Value = transfer.Proposed.By.Value;
+            command.Parameters.Add("@expiresAt", SqlDbType.DateTimeOffset).Value = Names.Utc(transfer.ExpiresAt);
+            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        if (transfer.Kept.Count == 0)
+            return;
+        await using var kept = new SqlCommand(
+            "insert into reg.ownership_transfer_kept_roles (compartment, role) values (@compartment, @role)",
+            connection, transaction());
+        kept.Parameters.Add("@compartment", SqlDbType.NVarChar, Sizes.Text).Value = transfer.Compartment.Value;
+        var role = kept.Parameters.Add("@role", SqlDbType.NVarChar, Sizes.Text);
+        foreach (var value in transfer.Kept.Distinct(StringComparer.Ordinal))
+        {
+            role.Value = value;
+            await kept.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
     }
 
     /// <summary>Seats <paramref name="owner"/> whoever owns the compartment now, in the transaction of the caller; the former owner, or <see langword="null"/>.</summary>
     public async Task<string?> ReplaceOwnerAnyAsync(string compartment, string owner, CancellationToken cancellationToken)
     {
-        var previous = await connection.QuerySingleOrDefaultAsync<string?>(new CommandDefinition(
+        string? previous = null;
+        await using (var select = new SqlCommand(
             "select owner_subject from reg.compartments with (updlock, rowlock) where compartment = @compartment",
-            new { compartment }, transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false);
-        await connection.ExecuteAsync(new CommandDefinition(
+            connection, transaction()))
+        {
+            select.Parameters.Add("@compartment", SqlDbType.NVarChar, Sizes.Text).Value = compartment;
+            await using var reader = await select.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false) && !reader.IsDBNull("owner_subject"))
+                previous = reader.GetString("owner_subject");
+        }
+
+        await using var update = new SqlCommand(
             "update reg.compartments set owner_subject = @owner where compartment = @compartment",
-            new { compartment, owner }, transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false);
+            connection, transaction());
+        update.Parameters.Add("@compartment", SqlDbType.NVarChar, Sizes.Text).Value = compartment;
+        update.Parameters.Add("@owner", SqlDbType.NVarChar, Sizes.Text).Value = owner;
+        await update.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         return previous;
     }
 
-    public Task<bool> ExistsAsync(string compartment, CancellationToken cancellationToken)
-        => connection.ExecuteScalarAsync<bool>(new CommandDefinition(
+    public async Task<bool> ExistsAsync(string compartment, CancellationToken cancellationToken)
+    {
+        await using var command = new SqlCommand(
             "select case when exists (select 1 from reg.compartments where compartment = @compartment) then cast(1 as bit) else cast(0 as bit) end",
-            new { compartment }, transaction(), cancellationToken: cancellationToken));
+            connection, transaction());
+        command.Parameters.Add("@compartment", SqlDbType.NVarChar, Sizes.Text).Value = compartment;
+        return (bool)(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!;
+    }
 
-    public Task DeleteTransferAsync(string compartment, CancellationToken cancellationToken)
-        => connection.ExecuteAsync(new CommandDefinition(
-            "delete from reg.ownership_transfers where compartment = @compartment",
-            new { compartment }, transaction(), cancellationToken: cancellationToken));
+    public async Task DeleteTransferAsync(string compartment, CancellationToken cancellationToken)
+    {
+        await using var command = new SqlCommand("delete from reg.ownership_transfers where compartment = @compartment", connection, transaction());
+        command.Parameters.Add("@compartment", SqlDbType.NVarChar, Sizes.Text).Value = compartment;
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
 
-    private static CompartmentRecord ToRecord(Row row)
-        => new(Compartment.Parse(row.Compartment), row.DisplayName, Names.CompartmentStatusOf(row.Status),
-            Names.AuditOf(row.CreatedAt, row.CreatedBy, row.ModifiedAt, row.ModifiedBy), row.Owner);
+    private static CompartmentRecord Read(SqlDataReader row)
+        => new(Compartment.Parse(row.GetString("compartment")), row.GetString("display_name"), Names.CompartmentStatusOf(row.GetString("status")),
+            Names.AuditOf(row), row.IsDBNull("owner_subject") ? null : row.GetString("owner_subject"));
 }
 
 /// <summary>The rows of <c>reg.users</c>: the projection of the accounts of Identity.</summary>
-internal sealed class UserRepository(DbConnection connection, Func<DbTransaction?> transaction)
+internal sealed class UserRepository(SqlConnection connection, Func<SqlTransaction?> transaction)
 {
-    private sealed record Row(string Subject, string Email, string DisplayName, string Status, DateTimeOffset CreatedAt, string CreatedBy, DateTimeOffset ModifiedAt, string ModifiedBy);
-
     private const string Columns = "subject, email, display_name, status, created_at, created_by, modified_at, modified_by";
-
-    private const string Selected = "subject as Subject, email as Email, display_name as DisplayName, status as Status, created_at as CreatedAt, created_by as CreatedBy, modified_at as ModifiedAt, modified_by as ModifiedBy";
 
     public async Task<UserRecord?> FindByEmailAsync(string email, CancellationToken cancellationToken)
     {
-        var row = await connection.QueryFirstOrDefaultAsync<Row>(new CommandDefinition(
-            $"select top (1) {Selected} from reg.users where email = @email order by subject",
-            new { email }, transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false);
-        return row is null ? null : ToRecord(row);
+        await using var command = new SqlCommand(
+            $"select top (1) {Columns} from reg.users where email = @email order by subject",
+            connection, transaction());
+        command.Parameters.Add("@email", SqlDbType.NVarChar, Sizes.Text).Value = email;
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        return await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ? Read(reader) : null;
     }
 
     public async Task<UserRecord?> GetAsync(string subject, CancellationToken cancellationToken)
     {
-        var row = await connection.QuerySingleOrDefaultAsync<Row>(new CommandDefinition(
-            $"select {Selected} from reg.users where subject = @subject",
-            new { subject }, transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false);
-        return row is null ? null : ToRecord(row);
+        await using var command = new SqlCommand(
+            $"select {Columns} from reg.users where subject = @subject",
+            connection, transaction());
+        command.Parameters.Add("@subject", SqlDbType.NVarChar, Sizes.Text).Value = subject;
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        return await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ? Read(reader) : null;
     }
 
     public async Task<IReadOnlyList<UserRecord>> ListAsync(CancellationToken cancellationToken)
     {
-        var rows = await connection.QueryAsync<Row>(new CommandDefinition(
-            $"select {Selected} from reg.users order by subject",
-            transaction: transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false);
-        return rows.Select(ToRecord).ToList();
+        await using var command = new SqlCommand(
+            $"select {Columns} from reg.users order by subject",
+            connection, transaction());
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        var users = new List<UserRecord>();
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            users.Add(Read(reader));
+        return users;
     }
 
-    public Task UpsertAsync(UserRecord user, CancellationToken cancellationToken)
-        => connection.ExecuteAsync(new CommandDefinition(
+    public async Task UpsertAsync(UserRecord user, CancellationToken cancellationToken)
+    {
+        await using var command = new SqlCommand(
             $"""
             begin try
                 update reg.users set email = @email, display_name = @displayName, status = @status, modified_at = @modifiedAt, modified_by = @modifiedBy where subject = @subject;
@@ -291,37 +360,45 @@ internal sealed class UserRepository(DbConnection connection, Func<DbTransaction
                 update reg.users set email = @email, display_name = @displayName, status = @status, modified_at = @modifiedAt, modified_by = @modifiedBy where subject = @subject;
             end catch
             """,
-            new
-            {
-                subject = user.Subject,
-                email = user.Email,
-                displayName = user.DisplayName,
-                status = Names.Of(user.Status),
-                createdAt = Names.Utc(user.Audit.Created.At),
-                createdBy = user.Audit.Created.By.Value,
-                modifiedAt = Names.Utc(user.Audit.Modified.At),
-                modifiedBy = user.Audit.Modified.By.Value,
-            }, transaction(), cancellationToken: cancellationToken));
+            connection, transaction());
+        command.Parameters.Add("@subject", SqlDbType.NVarChar, Sizes.Text).Value = user.Subject;
+        command.Parameters.Add("@email", SqlDbType.NVarChar, Sizes.Text).Value = user.Email;
+        command.Parameters.Add("@displayName", SqlDbType.NVarChar, Sizes.Text).Value = user.DisplayName;
+        command.Parameters.Add("@status", SqlDbType.NVarChar, Sizes.Text).Value = Names.Of(user.Status);
+        command.Parameters.Add("@createdAt", SqlDbType.DateTimeOffset).Value = Names.Utc(user.Audit.Created.At);
+        command.Parameters.Add("@createdBy", SqlDbType.NVarChar, Sizes.Text).Value = user.Audit.Created.By.Value;
+        command.Parameters.Add("@modifiedAt", SqlDbType.DateTimeOffset).Value = Names.Utc(user.Audit.Modified.At);
+        command.Parameters.Add("@modifiedBy", SqlDbType.NVarChar, Sizes.Text).Value = user.Audit.Modified.By.Value;
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
 
-    private static UserRecord ToRecord(Row row)
-        => new(row.Subject, row.Email, row.DisplayName, Names.UserStatusOf(row.Status),
-            Names.AuditOf(row.CreatedAt, row.CreatedBy, row.ModifiedAt, row.ModifiedBy));
+    private static UserRecord Read(SqlDataReader row)
+        => new(row.GetString("subject"), row.GetString("email"), row.GetString("display_name"), Names.UserStatusOf(row.GetString("status")),
+            Names.AuditOf(row));
 }
 
 /// <summary>The rows of <c>reg.operations</c>: the catalogue of what can be granted.</summary>
-internal sealed class CatalogRepository(DbConnection connection, Func<DbTransaction?> transaction)
+internal sealed class CatalogRepository(SqlConnection connection, Func<SqlTransaction?> transaction)
 {
     public async Task<IReadOnlyList<CatalogEntry>> ListAsync(CancellationToken cancellationToken)
     {
-        var rows = await connection.QueryAsync<(string Module, string Operation, string Kind, bool Declared, bool Hardened)>(new CommandDefinition(
+        await using var command = new SqlCommand(
             "select module, operation, kind, declared_second_factor, hardened_second_factor from reg.operations order by module, operation",
-            transaction: transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false);
-        return rows.Select(row => new CatalogEntry(row.Module, row.Operation, Names.KindOf(row.Kind), row.Declared, row.Hardened)).ToList();
+            connection, transaction());
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        var entries = new List<CatalogEntry>();
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            entries.Add(new CatalogEntry(reader.GetString("module"), reader.GetString("operation"), Names.KindOf(reader.GetString("kind")),
+                reader.GetBoolean("declared_second_factor"), reader.GetBoolean("hardened_second_factor")));
+        }
+        return entries;
     }
 
-    /// <summary>Inserts each entry, or replaces its module, kind and declared second factor — Dapper runs the statement once per entry, in the transaction of the store.</summary>
-    public Task UpsertAsync(IReadOnlyList<CatalogEntry> entries, CancellationToken cancellationToken)
-        => connection.ExecuteAsync(new CommandDefinition(
+    /// <summary>Inserts each entry, or replaces its module, kind and declared second factor — one statement per entry, on one command, in the transaction of the store.</summary>
+    public async Task UpsertAsync(IReadOnlyList<CatalogEntry> entries, CancellationToken cancellationToken)
+    {
+        await using var command = new SqlCommand(
             """
             begin try
                 update reg.operations set module = @module, kind = @kind, declared_second_factor = @declared where operation = @operation;
@@ -333,73 +410,120 @@ internal sealed class CatalogRepository(DbConnection connection, Func<DbTransact
                 update reg.operations set module = @module, kind = @kind, declared_second_factor = @declared where operation = @operation;
             end catch
             """,
-            entries.Select(e => new { operation = e.Operation, module = e.Module, kind = Names.Of(e.Kind), declared = e.DeclaredSecondFactor }).ToList(),
-            transaction(), cancellationToken: cancellationToken));
+            connection, transaction());
+        var operation = command.Parameters.Add("@operation", SqlDbType.NVarChar, Sizes.Text);
+        var module = command.Parameters.Add("@module", SqlDbType.NVarChar, Sizes.Text);
+        var kind = command.Parameters.Add("@kind", SqlDbType.NVarChar, Sizes.Text);
+        var declared = command.Parameters.Add("@declared", SqlDbType.Bit);
+        foreach (var entry in entries)
+        {
+            operation.Value = entry.Operation;
+            module.Value = entry.Module;
+            kind.Value = Names.Of(entry.Kind);
+            declared.Value = entry.DeclaredSecondFactor;
+            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+    }
 
-    public Task HardenAsync(IReadOnlyCollection<string> operations, CancellationToken cancellationToken)
-        => connection.ExecuteAsync(new CommandDefinition(
-            "update reg.operations set hardened_second_factor = 1 where operation in @operations",
-            new { operations = operations.ToArray() }, transaction(), cancellationToken: cancellationToken));
+    public async Task HardenAsync(IReadOnlyCollection<string> operations, CancellationToken cancellationToken)
+    {
+        // string_split gives one empty value for an empty list, which is no operation.
+        if (operations.Count == 0)
+            return;
+
+        await using var command = new SqlCommand(
+            "update reg.operations set hardened_second_factor = 1 where operation in (select value from string_split(@operations, N','))",
+            connection, transaction());
+        command.Parameters.Add("@operations", SqlDbType.NVarChar, Sizes.Max).Value = string.Join(',', operations);
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
 
     // The roles that hold any of the operations, before they lose them.
     public async Task<IReadOnlyList<string>> RolesHoldingAsync(IReadOnlyCollection<string> operations, CancellationToken cancellationToken)
-        => (await connection.QueryAsync<string>(new CommandDefinition(
-            "select distinct role from reg.role_operations where operation in @operations order by role",
-            new { operations = operations.ToArray() }, transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false)).ToList();
+    {
+        if (operations.Count == 0)
+            return [];
+
+        await using var command = new SqlCommand(
+            "select distinct role from reg.role_operations where operation in (select value from string_split(@operations, N',')) order by role",
+            connection, transaction());
+        command.Parameters.Add("@operations", SqlDbType.NVarChar, Sizes.Max).Value = string.Join(',', operations);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        var roles = new List<string>();
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            roles.Add(reader.GetString("role"));
+        return roles;
+    }
 
     // From the roles first: the catalogue is what their rows reference.
     public async Task RetireAsync(IReadOnlyCollection<string> operations, CancellationToken cancellationToken)
     {
-        await connection.ExecuteAsync(new CommandDefinition(
-            "delete from reg.role_operations where operation in @operations",
-            new { operations = operations.ToArray() }, transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false);
-        await connection.ExecuteAsync(new CommandDefinition(
-            "delete from reg.operations where operation in @operations",
-            new { operations = operations.ToArray() }, transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false);
+        if (operations.Count == 0)
+            return;
+
+        await using (var roles = new SqlCommand(
+            "delete from reg.role_operations where operation in (select value from string_split(@operations, N','))",
+            connection, transaction()))
+        {
+            roles.Parameters.Add("@operations", SqlDbType.NVarChar, Sizes.Max).Value = string.Join(',', operations);
+            await roles.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        await using var catalogue = new SqlCommand(
+            "delete from reg.operations where operation in (select value from string_split(@operations, N','))",
+            connection, transaction());
+        catalogue.Parameters.Add("@operations", SqlDbType.NVarChar, Sizes.Max).Value = string.Join(',', operations);
+        await catalogue.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 }
 
 /// <summary>The rows of <c>reg.roles</c> and <c>reg.role_operations</c>.</summary>
-internal sealed class RoleRepository(DbConnection connection, Func<DbTransaction?> transaction)
+internal sealed class RoleRepository(SqlConnection connection, Func<SqlTransaction?> transaction)
 {
-    private sealed record Row(
-        string Role, string Scope, string Category, string DisplayName, bool Declared, string AssignsCompartment, bool AssignsPlatform,
-        DateTimeOffset CreatedAt, string CreatedBy, DateTimeOffset ModifiedAt, string ModifiedBy);
-
-    private sealed record Pair(string Role, string Value);
+    private const string Filter = "(@name is null or r.role = @name) and (@scope is null or r.scope = @scope)";
 
     /// <summary>The roles with their operations and their assignable roles: one, those of a scope, or all, by name.</summary>
     public async Task<IReadOnlyList<Role>> ListAsync(string? name, RoleScope? scope, CancellationToken cancellationToken)
     {
         // Three reads rather than one join: a role's operations and its assignable roles would multiply each other.
-        const string Filter = "(@name is null or r.role = @name) and (@scope is null or r.scope = @scope)";
-        var parameters = new { name, scope = scope is { } s ? Names.Of(s) : null };
-        var rows = await connection.QueryAsync<Row>(new CommandDefinition(
+        var rows = new List<(string Name, RoleScope Scope, RoleCategory Category, string DisplayName, bool Declared, CompartmentRoleSelector AssignsCompartment, bool AssignsPlatform, Audit Audit)>();
+        await using (var command = new SqlCommand(
             $"""
-            select r.role as Role, r.scope as Scope, r.category as Category, r.display_name as DisplayName, r.declared as Declared,
-                   r.assigns_compartment as AssignsCompartment, r.assigns_platform as AssignsPlatform,
-                   r.created_at as CreatedAt, r.created_by as CreatedBy, r.modified_at as ModifiedAt, r.modified_by as ModifiedBy
+            select r.role, r.scope, r.category, r.display_name, r.declared, r.assigns_compartment, r.assigns_platform,
+                   r.created_at, r.created_by, r.modified_at, r.modified_by
             from reg.roles r
             where {Filter}
             order by r.role
             """,
-            parameters, transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false);
-        var operations = (await connection.QueryAsync<Pair>(new CommandDefinition(
-            $"select o.role as Role, o.operation as Value from reg.role_operations o join reg.roles r on r.role = o.role where {Filter} order by o.operation",
-            parameters, transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false)).ToLookup(pair => pair.Role, pair => pair.Value, StringComparer.Ordinal);
-        var assignable = (await connection.QueryAsync<Pair>(new CommandDefinition(
-            $"select a.role as Role, a.assignable_role as Value from reg.role_assignable_roles a join reg.roles r on r.role = a.role where {Filter} order by a.assignable_role",
-            parameters, transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false)).ToLookup(pair => pair.Role, pair => pair.Value, StringComparer.Ordinal);
+            connection, transaction()))
+        {
+            AddFilter(command, name, scope);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                rows.Add((reader.GetString("role"), Names.ScopeOf(reader.GetString("scope")), Names.CategoryOf(reader.GetString("category")),
+                    reader.GetString("display_name"), reader.GetBoolean("declared"), Names.SelectorOf(reader.GetString("assigns_compartment")),
+                    reader.GetBoolean("assigns_platform"), Names.AuditOf(reader)));
+            }
+        }
+
+        var operations = await ListValuesAsync(
+            $"select o.role, o.operation as value from reg.role_operations o join reg.roles r on r.role = o.role where {Filter} order by o.operation",
+            name, scope, cancellationToken).ConfigureAwait(false);
+        var assignable = await ListValuesAsync(
+            $"select a.role, a.assignable_role as value from reg.role_assignable_roles a join reg.roles r on r.role = a.role where {Filter} order by a.assignable_role",
+            name, scope, cancellationToken).ConfigureAwait(false);
         return rows
-            .Select(row => new Role(row.Role, Names.ScopeOf(row.Scope), Names.CategoryOf(row.Category), row.DisplayName, row.Declared,
-                operations[row.Role].ToList(),
-                new AssignableRoles(Names.SelectorOf(row.AssignsCompartment), row.AssignsPlatform, assignable[row.Role].ToList()),
-                Names.AuditOf(row.CreatedAt, row.CreatedBy, row.ModifiedAt, row.ModifiedBy)))
+            .Select(row => new Role(row.Name, row.Scope, row.Category, row.DisplayName, row.Declared,
+                operations.GetValueOrDefault(row.Name, []),
+                new AssignableRoles(row.AssignsCompartment, row.AssignsPlatform, assignable.GetValueOrDefault(row.Name, [])),
+                row.Audit))
             .ToList();
     }
 
-    public Task UpsertAsync(Role role, CancellationToken cancellationToken)
-        => connection.ExecuteAsync(new CommandDefinition(
+    public async Task UpsertAsync(Role role, CancellationToken cancellationToken)
+    {
+        await using var command = new SqlCommand(
             """
             begin try
                 update reg.roles set scope = @scope, category = @category, display_name = @displayName, declared = @declared, assigns_compartment = @assignsCompartment, assigns_platform = @assignsPlatform, modified_at = @modifiedAt, modified_by = @modifiedBy where role = @role;
@@ -411,62 +535,107 @@ internal sealed class RoleRepository(DbConnection connection, Func<DbTransaction
                 update reg.roles set scope = @scope, category = @category, display_name = @displayName, declared = @declared, assigns_compartment = @assignsCompartment, assigns_platform = @assignsPlatform, modified_at = @modifiedAt, modified_by = @modifiedBy where role = @role;
             end catch
             """,
-            new
-            {
-                role = role.Name,
-                scope = Names.Of(role.Scope),
-                category = Names.Of(role.Category),
-                displayName = role.DisplayName,
-                declared = role.Declared,
-                assignsCompartment = Names.Of(role.Assignable.Compartment),
-                assignsPlatform = role.Assignable.AllPlatform,
-                createdAt = Names.Utc(role.Audit.Created.At),
-                createdBy = role.Audit.Created.By.Value,
-                modifiedAt = Names.Utc(role.Audit.Modified.At),
-                modifiedBy = role.Audit.Modified.By.Value,
-            },
-            transaction(), cancellationToken: cancellationToken));
+            connection, transaction());
+        command.Parameters.Add("@role", SqlDbType.NVarChar, Sizes.Text).Value = role.Name;
+        command.Parameters.Add("@scope", SqlDbType.NVarChar, Sizes.Text).Value = Names.Of(role.Scope);
+        command.Parameters.Add("@category", SqlDbType.NVarChar, Sizes.Text).Value = Names.Of(role.Category);
+        command.Parameters.Add("@displayName", SqlDbType.NVarChar, Sizes.Text).Value = role.DisplayName;
+        command.Parameters.Add("@declared", SqlDbType.Bit).Value = role.Declared;
+        command.Parameters.Add("@assignsCompartment", SqlDbType.NVarChar, Sizes.Text).Value = Names.Of(role.Assignable.Compartment);
+        command.Parameters.Add("@assignsPlatform", SqlDbType.Bit).Value = role.Assignable.AllPlatform;
+        command.Parameters.Add("@createdAt", SqlDbType.DateTimeOffset).Value = Names.Utc(role.Audit.Created.At);
+        command.Parameters.Add("@createdBy", SqlDbType.NVarChar, Sizes.Text).Value = role.Audit.Created.By.Value;
+        command.Parameters.Add("@modifiedAt", SqlDbType.DateTimeOffset).Value = Names.Utc(role.Audit.Modified.At);
+        command.Parameters.Add("@modifiedBy", SqlDbType.NVarChar, Sizes.Text).Value = role.Audit.Modified.By.Value;
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
 
-    public Task DeleteOperationsAsync(string role, CancellationToken cancellationToken)
-        => connection.ExecuteAsync(new CommandDefinition(
-            "delete from reg.role_operations where role = @role",
-            new { role }, transaction(), cancellationToken: cancellationToken));
+    public async Task DeleteOperationsAsync(string role, CancellationToken cancellationToken)
+    {
+        await using var command = new SqlCommand("delete from reg.role_operations where role = @role", connection, transaction());
+        command.Parameters.Add("@role", SqlDbType.NVarChar, Sizes.Text).Value = role;
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
 
-    public Task InsertOperationsAsync(string role, string[] operations, CancellationToken cancellationToken)
-        => connection.ExecuteAsync(new CommandDefinition(
-            """
-            insert into reg.role_operations (role, operation) values (@role, @operation)
-            """,
-            operations.Select(operation => new { role, operation }).ToList(), transaction(), cancellationToken: cancellationToken));
+    public async Task InsertOperationsAsync(string role, string[] operations, CancellationToken cancellationToken)
+    {
+        await using var command = new SqlCommand(
+            "insert into reg.role_operations (role, operation) values (@role, @operation)",
+            connection, transaction());
+        command.Parameters.Add("@role", SqlDbType.NVarChar, Sizes.Text).Value = role;
+        var operation = command.Parameters.Add("@operation", SqlDbType.NVarChar, Sizes.Text);
+        foreach (var value in operations)
+        {
+            operation.Value = value;
+            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+    }
 
-    public Task DeleteAssignableAsync(string role, CancellationToken cancellationToken)
-        => connection.ExecuteAsync(new CommandDefinition(
-            "delete from reg.role_assignable_roles where role = @role",
-            new { role }, transaction(), cancellationToken: cancellationToken));
+    public async Task DeleteAssignableAsync(string role, CancellationToken cancellationToken)
+    {
+        await using var command = new SqlCommand("delete from reg.role_assignable_roles where role = @role", connection, transaction());
+        command.Parameters.Add("@role", SqlDbType.NVarChar, Sizes.Text).Value = role;
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
 
-    public Task InsertAssignableAsync(string role, string[] roles, CancellationToken cancellationToken)
-        => connection.ExecuteAsync(new CommandDefinition(
-            """
-            insert into reg.role_assignable_roles (role, assignable_role) values (@role, @assignable)
-            """,
-            roles.Select(assignable => new { role, assignable }).ToList(), transaction(), cancellationToken: cancellationToken));
+    public async Task InsertAssignableAsync(string role, string[] roles, CancellationToken cancellationToken)
+    {
+        await using var command = new SqlCommand(
+            "insert into reg.role_assignable_roles (role, assignable_role) values (@role, @assignable)",
+            connection, transaction());
+        command.Parameters.Add("@role", SqlDbType.NVarChar, Sizes.Text).Value = role;
+        var assignable = command.Parameters.Add("@assignable", SqlDbType.NVarChar, Sizes.Text);
+        foreach (var value in roles)
+        {
+            assignable.Value = value;
+            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+    }
 
     /// <summary>Deletes the role; its operations go with it, and a role still held is refused by the schema.</summary>
-    public Task DeleteAsync(string role, CancellationToken cancellationToken)
-        => connection.ExecuteAsync(new CommandDefinition(
-            "delete from reg.roles where role = @role",
-            new { role }, transaction(), cancellationToken: cancellationToken));
+    public async Task DeleteAsync(string role, CancellationToken cancellationToken)
+    {
+        await using var command = new SqlCommand("delete from reg.roles where role = @role", connection, transaction());
+        command.Parameters.Add("@role", SqlDbType.NVarChar, Sizes.Text).Value = role;
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private static void AddFilter(SqlCommand command, string? name, RoleScope? scope)
+    {
+        command.Parameters.Add("@name", SqlDbType.NVarChar, Sizes.Text).Value = (object?)name ?? DBNull.Value;
+        command.Parameters.Add("@scope", SqlDbType.NVarChar, Sizes.Text).Value = scope is { } s ? Names.Of(s) : DBNull.Value;
+    }
+
+    // The values of the roles the filter keeps, by role, in the order the statement gives them.
+    private async Task<Dictionary<string, List<string>>> ListValuesAsync(string sql, string? name, RoleScope? scope, CancellationToken cancellationToken)
+    {
+        await using var command = new SqlCommand(sql, connection, transaction());
+        AddFilter(command, name, scope);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        var values = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            var role = reader.GetString("role");
+            if (!values.TryGetValue(role, out var list))
+                values[role] = list = [];
+            list.Add(reader.GetString("value"));
+        }
+        return values;
+    }
 }
 
 /// <summary>The rows of <c>reg.memberships</c> and <c>reg.member_roles</c>.</summary>
-internal sealed class MembershipRepository(DbConnection connection, Func<DbTransaction?> transaction)
+internal sealed class MembershipRepository(SqlConnection connection, Func<SqlTransaction?> transaction)
 {
-    private sealed record Row(string Subject, string Compartment, DateTimeOffset GrantedAt, string GrantedBy, string? Role);
-
-    public Task<bool> ExistsAsync(string subject, string compartment, CancellationToken cancellationToken)
-        => connection.ExecuteScalarAsync<bool>(new CommandDefinition(
+    public async Task<bool> ExistsAsync(string subject, string compartment, CancellationToken cancellationToken)
+    {
+        await using var command = new SqlCommand(
             "select case when exists (select 1 from reg.memberships where subject = @subject and compartment = @compartment) then cast(1 as bit) else cast(0 as bit) end",
-            new { subject, compartment }, transaction(), cancellationToken: cancellationToken));
+            connection, transaction());
+        command.Parameters.Add("@subject", SqlDbType.NVarChar, Sizes.Text).Value = subject;
+        command.Parameters.Add("@compartment", SqlDbType.NVarChar, Sizes.Text).Value = compartment;
+        return (bool)(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!;
+    }
 
     /// <summary>
     /// The memberships with their roles: those of a user, those of a compartment, or those holding a role — in
@@ -474,9 +643,9 @@ internal sealed class MembershipRepository(DbConnection connection, Func<DbTrans
     /// </summary>
     public async Task<IReadOnlyList<Membership>> ListAsync(string? subject, string? compartment, string? role, CancellationToken cancellationToken)
     {
-        var rows = await connection.QueryAsync<Row>(new CommandDefinition(
+        await using var command = new SqlCommand(
             """
-            select m.subject as Subject, m.compartment as Compartment, m.granted_at as GrantedAt, m.granted_by as GrantedBy, r.role as Role
+            select m.subject, m.compartment, m.granted_at, m.granted_by, r.role
             from reg.memberships m
             left join reg.member_roles r on r.subject = m.subject and r.compartment = m.compartment
             where (@subject is null or m.subject = @subject)
@@ -486,7 +655,17 @@ internal sealed class MembershipRepository(DbConnection connection, Func<DbTrans
                     where h.subject = m.subject and h.compartment = m.compartment and h.role = @role))
             order by m.subject, m.compartment, r.role
             """,
-            new { subject, compartment, role }, transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false);
+            connection, transaction());
+        command.Parameters.Add("@subject", SqlDbType.NVarChar, Sizes.Text).Value = (object?)subject ?? DBNull.Value;
+        command.Parameters.Add("@compartment", SqlDbType.NVarChar, Sizes.Text).Value = (object?)compartment ?? DBNull.Value;
+        command.Parameters.Add("@role", SqlDbType.NVarChar, Sizes.Text).Value = (object?)role ?? DBNull.Value;
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        var rows = new List<(string Subject, string Compartment, DateTimeOffset GrantedAt, string GrantedBy, string? Role)>();
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            rows.Add((reader.GetString("subject"), reader.GetString("compartment"), reader.GetFieldValue<DateTimeOffset>("granted_at"),
+                reader.GetString("granted_by"), reader.IsDBNull("role") ? null : reader.GetString("role")));
+        }
         return rows
             .GroupBy(row => (row.Subject, row.Compartment))
             .Select(group =>
@@ -499,8 +678,9 @@ internal sealed class MembershipRepository(DbConnection connection, Func<DbTrans
             .ToList();
     }
 
-    public Task InsertAsync(string subject, string compartment, Stamp granted, CancellationToken cancellationToken)
-        => connection.ExecuteAsync(new CommandDefinition(
+    public async Task InsertAsync(string subject, string compartment, Stamp granted, CancellationToken cancellationToken)
+    {
+        await using var command = new SqlCommand(
             """
             begin try
                 insert into reg.memberships (subject, compartment, granted_at, granted_by) select @subject, @compartment, @grantedAt, @grantedBy where not exists (select 1 from reg.memberships where subject = @subject and compartment = @compartment);
@@ -509,16 +689,26 @@ internal sealed class MembershipRepository(DbConnection connection, Func<DbTrans
                 if error_number() not in (2601, 2627) throw;
             end catch
             """,
-            new { subject, compartment, grantedAt = Names.Utc(granted.At), grantedBy = granted.By.Value }, transaction(), cancellationToken: cancellationToken));
+            connection, transaction());
+        command.Parameters.Add("@subject", SqlDbType.NVarChar, Sizes.Text).Value = subject;
+        command.Parameters.Add("@compartment", SqlDbType.NVarChar, Sizes.Text).Value = compartment;
+        command.Parameters.Add("@grantedAt", SqlDbType.DateTimeOffset).Value = Names.Utc(granted.At);
+        command.Parameters.Add("@grantedBy", SqlDbType.NVarChar, Sizes.Text).Value = granted.By.Value;
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
 
     /// <summary>Deletes the membership; its roles go with it.</summary>
-    public Task DeleteAsync(string subject, string compartment, CancellationToken cancellationToken)
-        => connection.ExecuteAsync(new CommandDefinition(
-            "delete from reg.memberships where subject = @subject and compartment = @compartment",
-            new { subject, compartment }, transaction(), cancellationToken: cancellationToken));
+    public async Task DeleteAsync(string subject, string compartment, CancellationToken cancellationToken)
+    {
+        await using var command = new SqlCommand("delete from reg.memberships where subject = @subject and compartment = @compartment", connection, transaction());
+        command.Parameters.Add("@subject", SqlDbType.NVarChar, Sizes.Text).Value = subject;
+        command.Parameters.Add("@compartment", SqlDbType.NVarChar, Sizes.Text).Value = compartment;
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
 
-    public Task InsertRoleAsync(string subject, string compartment, string role, Stamp granted, CancellationToken cancellationToken)
-        => connection.ExecuteAsync(new CommandDefinition(
+    public async Task InsertRoleAsync(string subject, string compartment, string role, Stamp granted, CancellationToken cancellationToken)
+    {
+        await using var command = new SqlCommand(
             """
             begin try
                 insert into reg.member_roles (subject, compartment, role, granted_at, granted_by) select @subject, @compartment, @role, @grantedAt, @grantedBy where not exists (select 1 from reg.member_roles where subject = @subject and compartment = @compartment and role = @role);
@@ -527,36 +717,54 @@ internal sealed class MembershipRepository(DbConnection connection, Func<DbTrans
                 if error_number() not in (2601, 2627) throw;
             end catch
             """,
-            new { subject, compartment, role, grantedAt = Names.Utc(granted.At), grantedBy = granted.By.Value }, transaction(), cancellationToken: cancellationToken));
+            connection, transaction());
+        command.Parameters.Add("@subject", SqlDbType.NVarChar, Sizes.Text).Value = subject;
+        command.Parameters.Add("@compartment", SqlDbType.NVarChar, Sizes.Text).Value = compartment;
+        command.Parameters.Add("@role", SqlDbType.NVarChar, Sizes.Text).Value = role;
+        command.Parameters.Add("@grantedAt", SqlDbType.DateTimeOffset).Value = Names.Utc(granted.At);
+        command.Parameters.Add("@grantedBy", SqlDbType.NVarChar, Sizes.Text).Value = granted.By.Value;
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
 
-    public Task DeleteRoleAsync(string subject, string compartment, string role, CancellationToken cancellationToken)
-        => connection.ExecuteAsync(new CommandDefinition(
-            "delete from reg.member_roles where subject = @subject and compartment = @compartment and role = @role",
-            new { subject, compartment, role }, transaction(), cancellationToken: cancellationToken));
+    public async Task DeleteRoleAsync(string subject, string compartment, string role, CancellationToken cancellationToken)
+    {
+        await using var command = new SqlCommand("delete from reg.member_roles where subject = @subject and compartment = @compartment and role = @role", connection, transaction());
+        command.Parameters.Add("@subject", SqlDbType.NVarChar, Sizes.Text).Value = subject;
+        command.Parameters.Add("@compartment", SqlDbType.NVarChar, Sizes.Text).Value = compartment;
+        command.Parameters.Add("@role", SqlDbType.NVarChar, Sizes.Text).Value = role;
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
 
     /// <summary>Deletes every membership of the compartment; their roles go with them.</summary>
-    public Task DeleteByCompartmentAsync(string compartment, CancellationToken cancellationToken)
-        => connection.ExecuteAsync(new CommandDefinition(
-            "delete from reg.memberships where compartment = @compartment",
-            new { compartment }, transaction(), cancellationToken: cancellationToken));
+    public async Task DeleteByCompartmentAsync(string compartment, CancellationToken cancellationToken)
+    {
+        await using var command = new SqlCommand("delete from reg.memberships where compartment = @compartment", connection, transaction());
+        command.Parameters.Add("@compartment", SqlDbType.NVarChar, Sizes.Text).Value = compartment;
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
 }
 
 /// <summary>The rows of <c>reg.operator_roles</c>: the platform roles of the users.</summary>
-internal sealed class OperatorRepository(DbConnection connection, Func<DbTransaction?> transaction)
+internal sealed class OperatorRepository(SqlConnection connection, Func<SqlTransaction?> transaction)
 {
     public async Task<IReadOnlyList<string>> ListRolesAsync(string subject, CancellationToken cancellationToken)
     {
-        var rows = await connection.QueryAsync<string>(new CommandDefinition(
-            "select role from reg.operator_roles where subject = @subject order by role",
-            new { subject }, transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false);
-        return rows.ToList();
+        await using var command = new SqlCommand("select role from reg.operator_roles where subject = @subject order by role", connection, transaction());
+        command.Parameters.Add("@subject", SqlDbType.NVarChar, Sizes.Text).Value = subject;
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        var roles = new List<string>();
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            roles.Add(reader.GetString("role"));
+        return roles;
     }
 
     public async Task<IReadOnlyList<(string Subject, IReadOnlyCollection<string> Roles)>> ListAsync(CancellationToken cancellationToken)
     {
-        var rows = await connection.QueryAsync<(string Subject, string Role)>(new CommandDefinition(
-            "select subject, role from reg.operator_roles order by subject, role",
-            transaction: transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false);
+        await using var command = new SqlCommand("select subject, role from reg.operator_roles order by subject, role", connection, transaction());
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        var rows = new List<(string Subject, string Role)>();
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            rows.Add((reader.GetString("subject"), reader.GetString("role")));
         return rows
             .GroupBy(row => row.Subject, StringComparer.Ordinal)
             .Select(group => (group.Key, (IReadOnlyCollection<string>)group.Select(row => row.Role).ToList()))
@@ -565,14 +773,18 @@ internal sealed class OperatorRepository(DbConnection connection, Func<DbTransac
 
     public async Task<IReadOnlyList<string>> ListByRoleAsync(string role, CancellationToken cancellationToken)
     {
-        var rows = await connection.QueryAsync<string>(new CommandDefinition(
-            "select subject from reg.operator_roles where role = @role order by subject",
-            new { role }, transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false);
-        return rows.ToList();
+        await using var command = new SqlCommand("select subject from reg.operator_roles where role = @role order by subject", connection, transaction());
+        command.Parameters.Add("@role", SqlDbType.NVarChar, Sizes.Text).Value = role;
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        var subjects = new List<string>();
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            subjects.Add(reader.GetString("subject"));
+        return subjects;
     }
 
-    public Task InsertAsync(string subject, string role, Stamp granted, CancellationToken cancellationToken)
-        => connection.ExecuteAsync(new CommandDefinition(
+    public async Task InsertAsync(string subject, string role, Stamp granted, CancellationToken cancellationToken)
+    {
+        await using var command = new SqlCommand(
             """
             begin try
                 insert into reg.operator_roles (subject, role, granted_at, granted_by) select @subject, @role, @grantedAt, @grantedBy where not exists (select 1 from reg.operator_roles where subject = @subject and role = @role);
@@ -581,35 +793,144 @@ internal sealed class OperatorRepository(DbConnection connection, Func<DbTransac
                 if error_number() not in (2601, 2627) throw;
             end catch
             """,
-            new { subject, role, grantedAt = Names.Utc(granted.At), grantedBy = granted.By.Value }, transaction(), cancellationToken: cancellationToken));
+            connection, transaction());
+        command.Parameters.Add("@subject", SqlDbType.NVarChar, Sizes.Text).Value = subject;
+        command.Parameters.Add("@role", SqlDbType.NVarChar, Sizes.Text).Value = role;
+        command.Parameters.Add("@grantedAt", SqlDbType.DateTimeOffset).Value = Names.Utc(granted.At);
+        command.Parameters.Add("@grantedBy", SqlDbType.NVarChar, Sizes.Text).Value = granted.By.Value;
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
 
-    public Task DeleteAsync(string subject, string role, CancellationToken cancellationToken)
-        => connection.ExecuteAsync(new CommandDefinition(
-            "delete from reg.operator_roles where subject = @subject and role = @role",
-            new { subject, role }, transaction(), cancellationToken: cancellationToken));
+    public async Task DeleteAsync(string subject, string role, CancellationToken cancellationToken)
+    {
+        await using var command = new SqlCommand("delete from reg.operator_roles where subject = @subject and role = @role", connection, transaction());
+        command.Parameters.Add("@subject", SqlDbType.NVarChar, Sizes.Text).Value = subject;
+        command.Parameters.Add("@role", SqlDbType.NVarChar, Sizes.Text).Value = role;
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
 }
 
 /// <summary>The rows of <c>reg.invitations</c> and <c>reg.invitation_roles</c>.</summary>
-internal sealed class InvitationRepository(DbConnection connection, Func<DbTransaction?> transaction)
+internal sealed class InvitationRepository(SqlConnection connection, Func<SqlTransaction?> transaction)
 {
-    private sealed record Row(
-        Guid InvitationId, string TokenHash, string Compartment, string Email, bool DesignatesOwner, string Delivery,
-        DateTimeOffset IssuedAt, string IssuedBy, DateTimeOffset ExpiresAt, DateTimeOffset? AcceptedAt, string? AcceptedBy, DateTimeOffset? RevokedAt, string? RevokedBy, string? Role);
-
     private const string Select = """
-        select i.invitation_id as InvitationId, i.token_hash as TokenHash, i.compartment as Compartment, i.email as Email,
-               i.designates_owner as DesignatesOwner, i.delivery as Delivery, i.issued_at as IssuedAt, i.issued_by as IssuedBy,
-               i.expires_at as ExpiresAt, i.accepted_at as AcceptedAt, i.accepted_by as AcceptedBy, i.revoked_at as RevokedAt,
-               i.revoked_by as RevokedBy, r.role as Role
+        select i.invitation_id, i.token_hash, i.compartment, i.email, i.designates_owner, i.delivery, i.issued_at, i.issued_by,
+               i.expires_at, i.accepted_at, i.accepted_by, i.revoked_at, i.revoked_by, r.role
         from reg.invitations i
         left join reg.invitation_roles r on r.invitation_id = i.invitation_id
         """;
 
-    public async Task<IReadOnlyList<Invitation>> ListAsync(string where, object parameters, CancellationToken cancellationToken)
+    private const string Order = "order by i.issued_at desc, i.invitation_id, r.role";
+
+    public async Task<Invitation?> FindAsync(Guid invitationId, CancellationToken cancellationToken)
     {
-        var rows = await connection.QueryAsync<Row>(new CommandDefinition(
-            $"{Select} where {where} order by i.issued_at desc, i.invitation_id, r.role",
-            parameters, transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false);
+        await using var command = new SqlCommand($"{Select} where i.invitation_id = @invitationId {Order}", connection, transaction());
+        command.Parameters.Add("@invitationId", SqlDbType.UniqueIdentifier).Value = invitationId;
+        return (await ReadAsync(command, cancellationToken).ConfigureAwait(false)).SingleOrDefault();
+    }
+
+    public async Task<Invitation?> FindByTokenHashAsync(string tokenHash, CancellationToken cancellationToken)
+    {
+        await using var command = new SqlCommand($"{Select} where i.token_hash = @tokenHash {Order}", connection, transaction());
+        command.Parameters.Add("@tokenHash", SqlDbType.NVarChar, Sizes.Text).Value = tokenHash;
+        return (await ReadAsync(command, cancellationToken).ConfigureAwait(false)).SingleOrDefault();
+    }
+
+    public async Task<IReadOnlyList<Invitation>> ListByCompartmentAsync(string compartment, CancellationToken cancellationToken)
+    {
+        await using var command = new SqlCommand($"{Select} where i.compartment = @compartment {Order}", connection, transaction());
+        command.Parameters.Add("@compartment", SqlDbType.NVarChar, Sizes.Text).Value = compartment;
+        return await ReadAsync(command, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task InsertAsync(Invitation invitation, CancellationToken cancellationToken)
+    {
+        await using (var command = new SqlCommand(
+            """
+            insert into reg.invitations (invitation_id, token_hash, compartment, email, designates_owner, delivery, issued_at, issued_by, expires_at)
+            values (@id, @hash, @compartment, @email, @designatesOwner, @delivery, @issuedAt, @issuedBy, @expiresAt)
+            """,
+            connection, transaction()))
+        {
+            command.Parameters.Add("@id", SqlDbType.UniqueIdentifier).Value = invitation.InvitationId;
+            command.Parameters.Add("@hash", SqlDbType.NVarChar, Sizes.Text).Value = invitation.TokenHash;
+            command.Parameters.Add("@compartment", SqlDbType.NVarChar, Sizes.Text).Value = invitation.Compartment.Value;
+            command.Parameters.Add("@email", SqlDbType.NVarChar, Sizes.Text).Value = invitation.Email;
+            command.Parameters.Add("@designatesOwner", SqlDbType.Bit).Value = invitation.DesignatesOwner;
+            command.Parameters.Add("@delivery", SqlDbType.NVarChar, Sizes.Text).Value = invitation.Delivery == InvitationDelivery.Hand ? "hand" : "email";
+            command.Parameters.Add("@issuedAt", SqlDbType.DateTimeOffset).Value = Names.Utc(invitation.Issued.At);
+            command.Parameters.Add("@issuedBy", SqlDbType.NVarChar, Sizes.Text).Value = invitation.Issued.By.Value;
+            command.Parameters.Add("@expiresAt", SqlDbType.DateTimeOffset).Value = Names.Utc(invitation.ExpiresAt);
+            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        if (invitation.Roles.Count == 0)
+            return;
+        await using var roles = new SqlCommand(
+            "insert into reg.invitation_roles (invitation_id, role) values (@id, @role)",
+            connection, transaction());
+        roles.Parameters.Add("@id", SqlDbType.UniqueIdentifier).Value = invitation.InvitationId;
+        var role = roles.Parameters.Add("@role", SqlDbType.NVarChar, Sizes.Text);
+        foreach (var value in invitation.Roles.Distinct(StringComparer.Ordinal))
+        {
+            role.Value = value;
+            await roles.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    public async Task<bool> RevokeAsync(Guid id, Stamp revoked, CancellationToken cancellationToken)
+    {
+        await using var command = new SqlCommand(
+            "update reg.invitations set revoked_at = @at, revoked_by = @by where invitation_id = @id and accepted_at is null and revoked_at is null",
+            connection, transaction());
+        command.Parameters.Add("@id", SqlDbType.UniqueIdentifier).Value = id;
+        command.Parameters.Add("@at", SqlDbType.DateTimeOffset).Value = Names.Utc(revoked.At);
+        command.Parameters.Add("@by", SqlDbType.NVarChar, Sizes.Text).Value = revoked.By.Value;
+        return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) == 1;
+    }
+
+    // The token is spent atomically: of two acceptances at once, one updates the row.
+    public async Task<bool> TryAcceptAsync(string hash, string subject, DateTimeOffset at, CancellationToken cancellationToken)
+    {
+        await using var command = new SqlCommand(
+            """
+            update reg.invitations set accepted_at = @at, accepted_by = @subject
+            where token_hash = @hash and accepted_at is null and revoked_at is null and expires_at > @at
+            """,
+            connection, transaction());
+        command.Parameters.Add("@hash", SqlDbType.NVarChar, Sizes.Text).Value = hash;
+        command.Parameters.Add("@subject", SqlDbType.NVarChar, Sizes.Text).Value = subject;
+        command.Parameters.Add("@at", SqlDbType.DateTimeOffset).Value = Names.Utc(at);
+        return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) == 1;
+    }
+
+    public async Task<int> DeleteDeadBeforeAsync(DateTimeOffset before, CancellationToken cancellationToken)
+    {
+        await using var command = new SqlCommand(
+            "delete from reg.invitations where accepted_at is null and (expires_at < @before or revoked_at < @before)",
+            connection, transaction());
+        command.Parameters.Add("@before", SqlDbType.DateTimeOffset).Value = Names.Utc(before);
+        return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    // One row per role of an invitation, or one row without a role.
+    private static async Task<IReadOnlyList<Invitation>> ReadAsync(SqlCommand command, CancellationToken cancellationToken)
+    {
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        var rows = new List<(Guid InvitationId, string TokenHash, string Compartment, string Email, bool DesignatesOwner, string Delivery,
+            DateTimeOffset IssuedAt, string IssuedBy, DateTimeOffset ExpiresAt, DateTimeOffset? AcceptedAt, string? AcceptedBy,
+            DateTimeOffset? RevokedAt, string? RevokedBy, string? Role)>();
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            rows.Add((reader.GetGuid("invitation_id"), reader.GetString("token_hash"), reader.GetString("compartment"), reader.GetString("email"),
+                reader.GetBoolean("designates_owner"), reader.GetString("delivery"),
+                reader.GetFieldValue<DateTimeOffset>("issued_at"), reader.GetString("issued_by"), reader.GetFieldValue<DateTimeOffset>("expires_at"),
+                reader.IsDBNull("accepted_at") ? null : reader.GetFieldValue<DateTimeOffset>("accepted_at"),
+                reader.IsDBNull("accepted_by") ? null : reader.GetString("accepted_by"),
+                reader.IsDBNull("revoked_at") ? null : reader.GetFieldValue<DateTimeOffset>("revoked_at"),
+                reader.IsDBNull("revoked_by") ? null : reader.GetString("revoked_by"),
+                reader.IsDBNull("role") ? null : reader.GetString("role")));
+        }
         return rows.GroupBy(row => row.InvitationId).Select(group =>
         {
             var first = group.First();
@@ -622,114 +943,84 @@ internal sealed class InvitationRepository(DbConnection connection, Func<DbTrans
         }).ToList();
     }
 
-    public async Task InsertAsync(Invitation invitation, CancellationToken cancellationToken)
-    {
-        await connection.ExecuteAsync(new CommandDefinition(
-            """
-            insert into reg.invitations (invitation_id, token_hash, compartment, email, designates_owner, delivery, issued_at, issued_by, expires_at)
-            values (@id, @hash, @compartment, @email, @designatesOwner, @delivery, @issuedAt, @issuedBy, @expiresAt)
-            """,
-            new
-            {
-                id = invitation.InvitationId,
-                hash = invitation.TokenHash,
-                compartment = invitation.Compartment.Value,
-                email = invitation.Email,
-                designatesOwner = invitation.DesignatesOwner,
-                delivery = invitation.Delivery == InvitationDelivery.Hand ? "hand" : "email",
-                issuedAt = Names.Utc(invitation.Issued.At),
-                issuedBy = invitation.Issued.By.Value,
-                expiresAt = Names.Utc(invitation.ExpiresAt),
-            }, transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false);
-        if (invitation.Roles.Count > 0)
-            await connection.ExecuteAsync(new CommandDefinition(
-                "insert into reg.invitation_roles (invitation_id, role) values (@id, @role)",
-                invitation.Roles.Distinct(StringComparer.Ordinal).Select(role => new { id = invitation.InvitationId, role }).ToList(),
-                transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false);
-    }
-
-    public async Task<bool> RevokeAsync(Guid id, Stamp revoked, CancellationToken cancellationToken)
-        => await connection.ExecuteAsync(new CommandDefinition(
-            "update reg.invitations set revoked_at = @at, revoked_by = @by where invitation_id = @id and accepted_at is null and revoked_at is null",
-            new { id, at = Names.Utc(revoked.At), by = revoked.By.Value }, transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false) == 1;
-
-    // The token is spent atomically: of two acceptances at once, one updates the row.
-    public async Task<bool> TryAcceptAsync(string hash, string subject, DateTimeOffset at, CancellationToken cancellationToken)
-        => await connection.ExecuteAsync(new CommandDefinition(
-            """
-            update reg.invitations set accepted_at = @at, accepted_by = @subject
-            where token_hash = @hash and accepted_at is null and revoked_at is null and expires_at > @at
-            """,
-            new { hash, subject, at = Names.Utc(at) }, transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false) == 1;
-
-    public Task<int> DeleteDeadBeforeAsync(DateTimeOffset before, CancellationToken cancellationToken)
-        => connection.ExecuteAsync(new CommandDefinition(
-            "delete from reg.invitations where accepted_at is null and (expires_at < @before or revoked_at < @before)",
-            new { before = Names.Utc(before) }, transaction(), cancellationToken: cancellationToken));
-
     private static DateTimeOffset Utc(DateTimeOffset value) => value;
 }
 
 /// <summary>The rows of <c>reg.pending_acts</c>.</summary>
-internal sealed class PendingActRepository(DbConnection connection, Func<DbTransaction?> transaction)
+internal sealed class PendingActRepository(SqlConnection connection, Func<SqlTransaction?> transaction)
 {
-    private sealed record Row(
-        Guid ActId, string Kind, string? Subject, string? Role, string? Compartment, string? Definition, DateTimeOffset ProposedAt, string ProposedBy,
-        DateTimeOffset ExpiresAt, DateTimeOffset? ValidatedAt, string? ValidatedBy, DateTimeOffset? RejectedAt, string? RejectedBy, DateTimeOffset? ConsumedAt);
-
     // The definition as JSON, in the names of the routes.
     private sealed record DefinitionJson(string Scope, string Category, string DisplayName, string[] Operations, string AssignsCompartment, bool AssignsPlatform, string[] AssignableRoles);
 
-    private const string Select = """
-        select act_id as ActId, kind as Kind, subject as Subject, role as Role, compartment as Compartment, definition as Definition,
-               proposed_at as ProposedAt, proposed_by as ProposedBy, expires_at as ExpiresAt, validated_at as ValidatedAt,
-               validated_by as ValidatedBy, rejected_at as RejectedAt, rejected_by as RejectedBy, consumed_at as ConsumedAt
-        from reg.pending_acts
-        """;
-
     public async Task<IReadOnlyList<PendingAct>> ListAsync(Guid? actId, CancellationToken cancellationToken)
     {
-        var rows = await connection.QueryAsync<Row>(new CommandDefinition(
-            $"{Select} where (@actId is null or act_id = @actId) order by proposed_at desc, act_id",
-            new { actId }, transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false);
-        return rows.Select(ToAct).ToList();
+        await using var command = new SqlCommand(
+            """
+            select act_id, kind, subject, role, compartment, definition, proposed_at, proposed_by, expires_at, validated_at,
+                   validated_by, rejected_at, rejected_by, consumed_at
+            from reg.pending_acts
+            where (@actId is null or act_id = @actId) order by proposed_at desc, act_id
+            """,
+            connection, transaction());
+        command.Parameters.Add("@actId", SqlDbType.UniqueIdentifier).Value = (object?)actId ?? DBNull.Value;
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        var acts = new List<PendingAct>();
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            acts.Add(Read(reader));
+        return acts;
     }
 
-    public Task InsertAsync(PendingAct act, CancellationToken cancellationToken)
-        => connection.ExecuteAsync(new CommandDefinition(
+    public async Task InsertAsync(PendingAct act, CancellationToken cancellationToken)
+    {
+        await using var command = new SqlCommand(
             """
             insert into reg.pending_acts (act_id, kind, subject, role, compartment, definition, proposed_at, proposed_by, expires_at)
             values (@id, @kind, @subject, @role, @compartment, @definition, @proposedAt, @proposedBy, @expiresAt)
             """,
-            new
-            {
-                id = act.ActId,
-                kind = KindOf(act.Kind),
-                subject = act.Subject,
-                role = act.Role,
-                compartment = act.Compartment?.Value,
-                definition = act.Definition is { } definition ? JsonSerializer.Serialize(ToJson(act.Scope!.Value, definition)) : null,
-                proposedAt = Names.Utc(act.Proposed.At),
-                proposedBy = act.Proposed.By.Value,
-                expiresAt = Names.Utc(act.ExpiresAt),
-            }, transaction(), cancellationToken: cancellationToken));
+            connection, transaction());
+        command.Parameters.Add("@id", SqlDbType.UniqueIdentifier).Value = act.ActId;
+        command.Parameters.Add("@kind", SqlDbType.NVarChar, Sizes.Text).Value = KindOf(act.Kind);
+        command.Parameters.Add("@subject", SqlDbType.NVarChar, Sizes.Text).Value = (object?)act.Subject ?? DBNull.Value;
+        command.Parameters.Add("@role", SqlDbType.NVarChar, Sizes.Text).Value = (object?)act.Role ?? DBNull.Value;
+        command.Parameters.Add("@compartment", SqlDbType.NVarChar, Sizes.Text).Value = (object?)act.Compartment?.Value ?? DBNull.Value;
+        command.Parameters.Add("@definition", SqlDbType.NVarChar, Sizes.Max).Value = act.Definition is { } definition
+            ? JsonSerializer.Serialize(ToJson(act.Scope!.Value, definition))
+            : DBNull.Value;
+        command.Parameters.Add("@proposedAt", SqlDbType.DateTimeOffset).Value = Names.Utc(act.Proposed.At);
+        command.Parameters.Add("@proposedBy", SqlDbType.NVarChar, Sizes.Text).Value = act.Proposed.By.Value;
+        command.Parameters.Add("@expiresAt", SqlDbType.DateTimeOffset).Value = Names.Utc(act.ExpiresAt);
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
 
     public async Task<bool> CloseAsync(Guid id, bool validated, Stamp closed, CancellationToken cancellationToken)
-        => await connection.ExecuteAsync(new CommandDefinition(
+    {
+        await using var command = new SqlCommand(
             validated
                 ? "update reg.pending_acts set validated_at = @at, validated_by = @by where act_id = @id and validated_at is null and rejected_at is null"
                 : "update reg.pending_acts set rejected_at = @at, rejected_by = @by where act_id = @id and validated_at is null and rejected_at is null",
-            new { id, at = Names.Utc(closed.At), by = closed.By.Value }, transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false) == 1;
+            connection, transaction());
+        command.Parameters.Add("@id", SqlDbType.UniqueIdentifier).Value = id;
+        command.Parameters.Add("@at", SqlDbType.DateTimeOffset).Value = Names.Utc(closed.At);
+        command.Parameters.Add("@by", SqlDbType.NVarChar, Sizes.Text).Value = closed.By.Value;
+        return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) == 1;
+    }
 
     // One statement: the act is validated, for this person and this author, open and not spent — then spent.
     public async Task<bool> ConsumeAsync(Guid id, string subject, string proposedBy, DateTimeOffset now, CancellationToken cancellationToken)
-        => await connection.ExecuteAsync(new CommandDefinition(
+    {
+        await using var command = new SqlCommand(
             """
             update reg.pending_acts set consumed_at = @now
             where act_id = @id and kind = 'hand_delivery' and subject = @subject and proposed_by = @proposedBy
               and validated_at is not null and consumed_at is null and expires_at > @now
             """,
-            new { id, subject, proposedBy, now = Names.Utc(now) }, transaction(), cancellationToken: cancellationToken)).ConfigureAwait(false) == 1;
+            connection, transaction());
+        command.Parameters.Add("@id", SqlDbType.UniqueIdentifier).Value = id;
+        command.Parameters.Add("@subject", SqlDbType.NVarChar, Sizes.Text).Value = subject;
+        command.Parameters.Add("@proposedBy", SqlDbType.NVarChar, Sizes.Text).Value = proposedBy;
+        command.Parameters.Add("@now", SqlDbType.DateTimeOffset).Value = Names.Utc(now);
+        return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) == 1;
+    }
 
     private static string KindOf(PendingActKind kind) => kind switch
     {
@@ -740,25 +1031,30 @@ internal sealed class PendingActRepository(DbConnection connection, Func<DbTrans
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unknown act."),
     };
 
-    private static PendingAct ToAct(Row row)
+    private static PendingAct Read(SqlDataReader row)
     {
-        var kind = row.Kind switch
+        var name = row.GetString("kind");
+        var kind = name switch
         {
             "platform_role" => PendingActKind.PlatformRole,
             "role_definition" => PendingActKind.RoleDefinition,
             "ownership_rescue" => PendingActKind.OwnershipRescue,
             "hand_delivery" => PendingActKind.HandDelivery,
-            _ => throw new InvalidOperationException($"reg.pending_acts holds the kind '{row.Kind}', which this package does not know."),
+            _ => throw new InvalidOperationException($"reg.pending_acts holds the kind '{name}', which this package does not know."),
         };
-        var json = row.Definition is null ? null : JsonSerializer.Deserialize<DefinitionJson>(row.Definition);
-        return new PendingAct(row.ActId, kind, row.Subject, row.Role, row.Compartment is null ? null : Compartment.Parse(row.Compartment),
+        var json = row.IsDBNull("definition") ? null : JsonSerializer.Deserialize<DefinitionJson>(row.GetString("definition"));
+        return new PendingAct(row.GetGuid("act_id"), kind,
+            row.IsDBNull("subject") ? null : row.GetString("subject"),
+            row.IsDBNull("role") ? null : row.GetString("role"),
+            row.IsDBNull("compartment") ? null : Compartment.Parse(row.GetString("compartment")),
             json is null ? null : Names.ScopeOf(json.Scope),
             json is null ? null : new RoleDefinition(Names.CategoryOf(json.Category), json.DisplayName, json.Operations,
                 new AssignableRoles(Names.SelectorOf(json.AssignsCompartment), json.AssignsPlatform, json.AssignableRoles)),
-            new Stamp(Utc(row.ProposedAt), Actor.Parse(row.ProposedBy)), Utc(row.ExpiresAt),
-            row.ValidatedAt is { } validated ? new Stamp(Utc(validated), Actor.Parse(row.ValidatedBy!)) : null,
-            row.RejectedAt is { } rejected ? new Stamp(Utc(rejected), Actor.Parse(row.RejectedBy!)) : null,
-            row.ConsumedAt is { } consumed ? Utc(consumed) : null);
+            new Stamp(Utc(row.GetFieldValue<DateTimeOffset>("proposed_at")), Actor.Parse(row.GetString("proposed_by"))),
+            Utc(row.GetFieldValue<DateTimeOffset>("expires_at")),
+            row.IsDBNull("validated_at") ? null : new Stamp(Utc(row.GetFieldValue<DateTimeOffset>("validated_at")), Actor.Parse(row.GetString("validated_by"))),
+            row.IsDBNull("rejected_at") ? null : new Stamp(Utc(row.GetFieldValue<DateTimeOffset>("rejected_at")), Actor.Parse(row.GetString("rejected_by"))),
+            row.IsDBNull("consumed_at") ? null : Utc(row.GetFieldValue<DateTimeOffset>("consumed_at")));
     }
 
     private static DefinitionJson ToJson(RoleScope scope, RoleDefinition definition)

@@ -21,8 +21,8 @@ The library targets .NET 10 and is released under the MIT license.
 | Package | Contents | Depends on |
 | --- | --- | --- |
 | `Stellaegis.Registry` | The compartments and their owners, the users, the catalogue, the roles, the memberships, the operators, the invitations, the validations; the effective rights and the `IRightsSink` port; the module and its operations; the role declarations; the in-memory stores | `Stellaegis.Primitives`, `Stellaegis.Primitives.Hosting` |
-| `Stellaegis.Registry.PostgreSQL` | The stores on PostgreSQL, and the `reg` schema declared as a module database for the installation and the verification | `Stellaegis.Primitives.Data`, Npgsql, Dapper |
-| `Stellaegis.Registry.SqlServer` | The same stores and the same `reg` schema on SQL Server | `Stellaegis.Primitives.Data`, Microsoft.Data.SqlClient, Dapper |
+| `Stellaegis.Registry.PostgreSQL` | The stores on PostgreSQL, and the `reg` schema declared as a module database for the installation and the verification | `Stellaegis.Primitives.Data`, Npgsql |
+| `Stellaegis.Registry.SqlServer` | The same stores and the same `reg` schema on SQL Server | `Stellaegis.Primitives.Data`, Microsoft.Data.SqlClient |
 | `Stellaegis.Registry.AspNetCore` | The administration routes, each under its operation, decided in the shared space; the invitation routes; the rule on a person, the authorization of a `Subject` | `Stellaegis.Primitives.AspNetCore`, ASP.NET Core |
 | `Stellaegis.Registry.Identity` | The registry and `Stellaegis.Identity` composed: the ports of the accounts answered by the registry — the second person who approves a reset link handed over, the invitation an account accepts | `Stellaegis.Registry`, `Stellaegis.Identity` |
 
