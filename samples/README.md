@@ -170,7 +170,8 @@ curl.exe -sk "$base/api/items" -H "Authorization: Bearer $admin"
 
 Blocking Paul's account (`POST /api/admin/identity/users/{id}/block`) is the other way a right ends: the bus
 deactivates him in the registry — which withdraws everything from Access through the sink —, refuses him at the
-door at once, and revokes every token the issuer gave him.
+door at once, and revokes every token the issuer gave him. A password changed, reset or removed revokes his tokens
+too: what was obtained on the former password is no longer his.
 
 ## What the example is not
 

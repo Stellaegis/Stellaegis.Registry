@@ -258,7 +258,9 @@ public sealed class LoggingMailer(ILogger<LoggingMailer> logger) : IIdentityMail
 ///   <item>an account registered in Identity is recorded in the registry's directory, by the person themselves;</item>
 ///   <item>an account blocked is deactivated in the registry — which withdraws its rights from Access through the
 ///   sink —, refused by the admission at once, and every token the issuer gave it is revoked;</item>
-///   <item>an account unblocked is reactivated and admitted again.</item>
+///   <item>an account unblocked is reactivated and admitted again;</item>
+///   <item>a password changed, reset or removed revokes every token the issuer gave the account: what was obtained
+///   on the former password is no longer the person's.</item>
 /// </list>
 /// A host with several processes registers the bus of <c>Stellaegis.Backplane</c> instead, and subscribes the same way.
 /// </summary>
@@ -294,6 +296,14 @@ public sealed class SampleEventPublisher(BlockedAccounts accounts, IServiceScope
                 accounts.Unblock(unblocked.UserUniqueId);
                 using (var scope = scopes.CreateScope())
                     await scope.ServiceProvider.GetRequiredService<IUserDirectory>().ReactivateAsync(unblocked.UserUniqueId.ToString("N"), Identity, cancellationToken);
+                break;
+            case UserPasswordChangedEvent changed:
+                using (var scope = scopes.CreateScope())
+                {
+                    var subject = changed.UserUniqueId.ToString("N");
+                    var revoked = await scope.ServiceProvider.GetRequiredService<ITokenRevoker>().RevokeSubjectAsync(subject, cancellationToken);
+                    logger.LogInformation("Password of {Subject} {Reason}: {Count} token(s) revoked", subject, changed.Reason, revoked);
+                }
                 break;
         }
         logger.LogInformation("Event {Event}", @event);

@@ -5,6 +5,15 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **The example host revokes a person's tokens when their password changes**, as it does when their account is
+  blocked. It subscribed to `UserBlocked` alone: a refresh token obtained with a stolen password kept issuing tokens
+  after the reset. A host composed like the example adds the same subscription to its bus; the CHANGELOG of
+  `Stellaegis.Issuer`, 5.4.3, gives it.
+
 ## [7.1.2] — 2026-11-16
 
 On `Stellaegis.Primitives` 6.0.0, whose `Stellaegis.Primitives.Data` no longer references Dapper: an application
