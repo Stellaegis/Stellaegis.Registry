@@ -14,6 +14,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   after the reset. A host composed like the example adds the same subscription to its bus; the CHANGELOG of
   `Stellaegis.Issuer`, 5.4.3, gives it.
 
+### Changed
+
+- **`Stellaegis.Primitives` 6.1.0 and `Stellaegis.Identity` 9.1.0**, which the next version of this package
+  depends on; the example host on `Stellaegis.Issuer` 5.5.0. Nothing changes in this package's code. With them, the
+  example host refuses a refresh once the security stamp of the account changed — a password, an address, a second
+  factor —, without waiting for an event: replayed on the example, the subscription to the password cut, the former
+  refresh token is refused and the former access token lives to its expiration; a refresh token issued before is
+  refused once, and the application goes back through the authorization without a page.
+
 ## [7.1.2] — 2026-11-16
 
 On `Stellaegis.Primitives` 6.0.0, whose `Stellaegis.Primitives.Data` no longer references Dapper: an application
