@@ -14,13 +14,13 @@
     <PackageVersion Include="Stellaegis.Identity.PostgreSQL" Version="9.0.3" />
     <PackageVersion Include="Stellaegis.Identity.AspNetCore" Version="9.0.3" />
     <PackageVersion Include="Stellaegis.Identity.Server" Version="9.0.3" />
-    <PackageVersion Include="Stellaegis.Issuer" Version="5.4.1" />
-    <PackageVersion Include="Stellaegis.Issuer.PostgreSQL" Version="5.4.1" />
-    <PackageVersion Include="Stellaegis.Issuer.Client" Version="5.4.1" />
-    <PackageVersion Include="Stellaegis.Issuer.Server" Version="5.4.1" />
-    <PackageVersion Include="Stellaegis.Access" Version="6.1.1" />
-    <PackageVersion Include="Stellaegis.Access.PostgreSQL" Version="6.1.1" />
-    <PackageVersion Include="Stellaegis.Access.AspNetCore" Version="6.1.1" />
+    <PackageVersion Include="Stellaegis.Issuer" Version="5.4.2" />
+    <PackageVersion Include="Stellaegis.Issuer.PostgreSQL" Version="5.4.2" />
+    <PackageVersion Include="Stellaegis.Issuer.Client" Version="5.4.2" />
+    <PackageVersion Include="Stellaegis.Issuer.Server" Version="5.4.2" />
+    <PackageVersion Include="Stellaegis.Access" Version="6.1.2" />
+    <PackageVersion Include="Stellaegis.Access.PostgreSQL" Version="6.1.2" />
+    <PackageVersion Include="Stellaegis.Access.AspNetCore" Version="6.1.2" />
     <!-- PostgreSQL -->
     <PackageVersion Include="Npgsql" Version="10.0.3" />
     <!-- SQL Server -->
