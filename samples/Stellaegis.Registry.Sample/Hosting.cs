@@ -259,8 +259,9 @@ public sealed class LoggingMailer(ILogger<LoggingMailer> logger) : IIdentityMail
 ///   <item>an account blocked is deactivated in the registry — which withdraws its rights from Access through the
 ///   sink —, refused by the admission at once, and every token the issuer gave it is revoked;</item>
 ///   <item>an account unblocked is reactivated and admitted again;</item>
-///   <item>a password changed, reset or removed revokes every token the issuer gave the account: what was obtained
-///   on the former password is no longer the person's.</item>
+///   <item>whatever renews the security stamp of the account — a password, an address, a second factor, a block —
+///   revokes every token the issuer gave it: the refresh tokens are refused by the stamp already, and the access
+///   tokens are cut at once rather than at their expiration.</item>
 /// </list>
 /// A host with several processes registers the bus of <c>Stellaegis.Backplane</c> instead, and subscribes the same way.
 /// </summary>
@@ -297,12 +298,12 @@ public sealed class SampleEventPublisher(BlockedAccounts accounts, IServiceScope
                 using (var scope = scopes.CreateScope())
                     await scope.ServiceProvider.GetRequiredService<IUserDirectory>().ReactivateAsync(unblocked.UserUniqueId.ToString("N"), Identity, cancellationToken);
                 break;
-            case UserPasswordChangedEvent changed:
+            case UserSecurityStampRenewedEvent renewed:
                 using (var scope = scopes.CreateScope())
                 {
-                    var subject = changed.UserUniqueId.ToString("N");
+                    var subject = renewed.UserUniqueId.ToString("N");
                     var revoked = await scope.ServiceProvider.GetRequiredService<ITokenRevoker>().RevokeSubjectAsync(subject, cancellationToken);
-                    logger.LogInformation("Password of {Subject} {Reason}: {Count} token(s) revoked", subject, changed.Reason, revoked);
+                    logger.LogInformation("Security stamp of {Subject} renewed ({Reason}): {Count} token(s) revoked", subject, renewed.Reason, revoked);
                 }
                 break;
         }

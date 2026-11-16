@@ -16,7 +16,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- **`Stellaegis.Primitives` 6.1.0 and `Stellaegis.Identity` 9.1.0**, which the next version of this package
+- **The example host revokes on `UserSecurityStampRenewed`** of `Stellaegis.Identity` 9.2.0, rather than on
+  `UserPasswordChanged`: published at every renewal of the stamp, it covers the password, the address and the second
+  factor, and cuts the access tokens already issued at once.
+- **`Stellaegis.Primitives` 6.1.0 and `Stellaegis.Identity` 9.2.0**, which the next version of this package
   depends on; the example host on `Stellaegis.Issuer` 5.5.0. Nothing changes in this package's code. With them, the
   example host refuses a refresh once the security stamp of the account changed — a password, an address, a second
   factor —, without waiting for an event: replayed on the example, the subscription to the password cut, the former
